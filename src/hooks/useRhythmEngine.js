@@ -355,10 +355,23 @@ export function useRhythmEngine() {
 
   // ---- judged tap (real-time, maimai-style windows) ----
   // `padId` (one of 'L' | 'R' | 'L1' | 'R1' | 'L2' | 'R2') identifies which
-  // button/key triggered this tap — both for the FAST/LATE badge, and now
-  // for judging whether it's even the right hand for the note it's closest
-  // to. Each scheduled note is judged (or auto-missed) exactly once: a tap
-  // only ever matches a note that's both unjudged and still inside its
+  // button/key triggered this tap. L and R are independent judgement lanes,
+  // like a real rhythm game: a tap only ever competes against *that same
+  // hand's* unjudged notes, never the other hand's — so at fast 16th notes,
+  // where an L and the next R can be closer together than the judge window
+  // is wide, an R tap can't accidentally get pulled onto a nearby L (or vice
+  // versa) just because that L happened to be a few ms closer in time.
+  //
+  // Within one hand's lane, a tap matches the EARLIEST still-open note for
+  // that hand (not whichever is numerically closest) — scheduledEventsRef is
+  // already time-ordered, so this is just "first unjudged, in-window match".
+  // That keeps consecutive same-hand notes (a double stroke's RR, LL, ...)
+  // judged one-for-one in the order they're actually struck, instead of a
+  // late first tap potentially jumping ahead to score against the *second*
+  // note while leaving the first to time out as a Miss.
+  //
+  // Either way, each note is judged (or auto-missed) exactly once: a tap
+  // only ever matches a note that's both unjudged and still inside its own
   // active window, so a stray tap can't reach back and "steal" a judgement
   // from a note it wasn't actually near.
   const registerJudgedTap = useCallback(
@@ -369,7 +382,7 @@ export function useRhythmEngine() {
         // Nothing playing to judge against — still confirm the pad/key works
         // with an audible hit sound (same sample as a Perfect hit), just with
         // no tier, no count, and no badge (nothing to be early or late
-        // relative to, and no note to have hit the wrong hand for).
+        // relative to).
         if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, 'idle', s.hitSoundVolume)
         return
       }
@@ -382,38 +395,23 @@ export function useRhythmEngine() {
       const tappedHand = handForPad(padId)
 
       let nearest = null
-      let bestAbsDelta = Infinity
-      let bestSignedDelta = 0
       for (const ev of scheduledEventsRef.current) {
-        if (ev.judged) continue
-        const signed = ev.time - now // positive: beat is still ahead (tap was early/FAST); negative: beat already passed (tap was LATE)
-        const d = Math.abs(signed)
-        if (d > GOOD_WINDOW_SEC) continue // outside any note's active window — not a candidate
-        if (d < bestAbsDelta) {
-          bestAbsDelta = d
-          bestSignedDelta = signed
-          nearest = ev
-        }
+        if (ev.judged || ev.hand !== tappedHand) continue
+        if (Math.abs(ev.time - now) > GOOD_WINDOW_SEC) continue // outside this note's active window — not a candidate
+        nearest = ev
+        break // earliest unjudged, in-window note for this hand — preserves tap order
       }
 
       if (!nearest) {
-        // No open note within reach — a stray tap. Still responsive, but
-        // nothing to judge (matches the "not playing" fallback above).
+        // No open same-hand note within reach — a stray tap (including
+        // tapping a hand nothing is currently due for). Still responsive,
+        // but nothing to judge (matches the "not playing" fallback above).
         if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, 'idle', s.hitSoundVolume)
         return
       }
 
-      if (nearest.hand !== tappedHand) {
-        // Wrong hand: this note is left open (not consumed) so the correct
-        // hand can still hit it before the window closes, or it'll be
-        // auto-missed like any other unhit note. The pad actually pressed
-        // still gets clear "that was wrong" feedback.
-        if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, 'miss', s.missSoundVolume)
-        if (padId) showTapFeedback([padId], 'miss', null)
-        return
-      }
-
-      const deltaMs = bestAbsDelta * 1000
+      const signed = nearest.time - now // positive: beat is still ahead (tap was early/FAST); negative: beat already passed (tap was LATE)
+      const deltaMs = Math.abs(signed) * 1000
       let tier
       if (deltaMs <= 16.66) tier = 'critical'
       else if (deltaMs <= 50) tier = 'perfect'
@@ -425,7 +423,7 @@ export function useRhythmEngine() {
 
       // Critical Perfect is treated as "on time" — no badge at all.
       if (padId && tier !== 'critical') {
-        const direction = bestSignedDelta > 0 ? 'fast' : 'late'
+        const direction = signed > 0 ? 'fast' : 'late'
         showTapFeedback([padId], tier, direction)
       }
 
