@@ -182,7 +182,16 @@ input:focus {
   display: inline-block;
   padding: 2px 10px;
   border-radius: 8px;
-  transition: background 0.1s ease;
+  background: transparent;
+  animation: leadin-flash 220ms ease-out;
+}
+@keyframes leadin-flash {
+  from {
+    background: var(--select-glow);
+  }
+  to {
+    background: transparent;
+  }
 }
 .leadin__label {
   font-size: 11px;

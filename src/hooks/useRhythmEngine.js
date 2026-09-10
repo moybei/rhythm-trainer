@@ -15,7 +15,8 @@ const initialState = {
   selectedPatternId: 'single',
   mirrored: false,
 
-  lastTapAt: null,
+  tapTempoOpen: false,
+  tapTempoTapCount: 0,
 
   accentEnabled: true,
   guideEnabled: true,
@@ -32,6 +33,7 @@ const initialState = {
   inLeadin: false,
   leadinCount: 0,
   leadInTotal: 0,
+  leadinFlashSeq: 0, // bumped on every lead-in beat so the UI can flash once per hit
 
   offsetMs: 0,
   keyBinds: DEFAULT_KEYBINDS,
@@ -141,6 +143,7 @@ export function useRhythmEngine() {
   const missedIndexTimerRef = useRef(null)
   const tapFeedbackSeqRef = useRef(0)
   const tapFeedbackTimerRef = useRef(null)
+  const leadinFlashSeqRef = useRef(0)
 
   const calSchedulerTimerRef = useRef(null)
   const calNextTimeRef = useRef(0)
@@ -217,17 +220,40 @@ export function useRhythmEngine() {
     },
     [patch],
   )
-  const handleTapTempo = useCallback(() => {
+  // ---- tap tempo: opens a small UI where every "X" press (or tap of the
+  // on-screen button) is logged; the BPM field updates live from the
+  // average of the last 8 taps. Gating "X" on tapTempoOpen (rather than
+  // treating it as a global tap-tempo hotkey) is what lets the player bind
+  // "X" to one of the L/R/pad keys elsewhere without the two colliding.
+  const tapTempoTimestampsRef = useRef([])
+
+  const openTapTempo = useCallback(() => {
+    tapTempoTimestampsRef.current = []
+    patch({ tapTempoOpen: true, tapTempoTapCount: 0 })
+  }, [patch])
+
+  const closeTapTempo = useCallback(() => {
+    patch({ tapTempoOpen: false })
+  }, [patch])
+
+  const registerTapTempoTap = useCallback(() => {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
-    const prev = stateRef.current.lastTapAt
-    let bpm = stateRef.current.bpm
-    if (prev != null) {
-      const delta = now - prev
-      if (delta > 200 && delta < 2000) {
-        bpm = Math.max(40, Math.min(300, Math.round(60000 / delta)))
-      }
+    const taps = tapTempoTimestampsRef.current
+    const last = taps.length ? taps[taps.length - 1] : null
+    // A long gap since the last tap means the player paused and is starting
+    // a fresh tempo, not continuing the old one — drop the stale taps.
+    if (last != null && now - last > 2000) taps.length = 0
+    taps.push(now)
+    if (taps.length > 8) taps.shift() // average over the last 8 taps
+    if (taps.length >= 2) {
+      let totalInterval = 0
+      for (let i = 1; i < taps.length; i++) totalInterval += taps[i] - taps[i - 1]
+      const avgInterval = totalInterval / (taps.length - 1)
+      const bpm = Math.max(20, Math.min(300, Math.round(60000 / avgInterval)))
+      patch({ bpm, tapTempoTapCount: taps.length })
+    } else {
+      patch({ tapTempoTapCount: taps.length })
     }
-    patch({ lastTapAt: now, bpm })
   }, [patch])
 
   const setStatic = useCallback(() => patch({ bpmMode: 'static' }), [patch])
@@ -375,11 +401,15 @@ export function useRhythmEngine() {
       const pattern = currentPattern(s.selectedPatternId)
 
       if (phaseRef.current === 'leadin') {
-        const isDown = s.accentEnabled && beatCounterRef.current % 4 === 0
-        playLeadInClick(ctx, time, isDown, s.metronomeVolume)
-        beatCounterRef.current++
+        // Every lead-in beat sounds identical — unlike the pattern's beat-1
+        // accent, the count-in shouldn't hint at bar position.
+        playLeadInClick(ctx, time, false, s.metronomeVolume)
         leadBeatsRemainingRef.current--
-        patch({ leadinCount: Math.max(0, leadBeatsRemainingRef.current) })
+        leadinFlashSeqRef.current++
+        patch({
+          leadinCount: Math.max(0, leadBeatsRemainingRef.current),
+          leadinFlashSeq: leadinFlashSeqRef.current,
+        })
         const beatDur = 60 / currentBpmRef.current
         nextNoteTimeRef.current = time + beatDur
         if (leadBeatsRemainingRef.current <= 0) {
@@ -626,10 +656,13 @@ export function useRhythmEngine() {
         return
       }
 
-      if (key === 'X') {
-        handleTapTempo()
+      // Same idea for the tap-tempo UI: X only means "tap" while it's open,
+      // so it's free to also be bound as a regular L/R/pad key otherwise.
+      if (s.tapTempoOpen) {
+        if (key === 'X') registerTapTempoTap()
         return
       }
+
       const b = s.keyBinds
       let padId = null
       if (key === b.L) padId = 'L'
@@ -640,7 +673,7 @@ export function useRhythmEngine() {
       else if (key === b.R2) padId = 'R2'
       if (padId) registerJudgedTap(padId)
     },
-    [patch, handleTapTempo, registerJudgedTap, registerCalibrationTap],
+    [patch, registerTapTempoTap, registerJudgedTap, registerCalibrationTap],
   )
 
   useEffect(() => {
@@ -666,7 +699,9 @@ export function useRhythmEngine() {
     handleMetronomeVolumeInput,
     handleHitSoundVolumeInput,
     handleGuideVolumeInput,
-    handleTapTempo,
+    openTapTempo,
+    closeTapTempo,
+    registerTapTempoTap,
     setStatic,
     setProgrammed,
     setRampRep,

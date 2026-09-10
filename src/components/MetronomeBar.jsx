@@ -1,6 +1,6 @@
 import { ChevronDownIcon, PauseIcon, PlayIcon } from './icons.jsx'
 
-export default function MetronomeBar({ engine, display, isOpen, onToggleOpen, isDesktop }) {
+export default function MetronomeBar({ engine, display, isOpen, onToggleOpen }) {
   const { state } = engine
   const isProgrammed = state.bpmMode === 'programmed'
 
@@ -24,10 +24,9 @@ export default function MetronomeBar({ engine, display, isOpen, onToggleOpen, is
 
         {state.inLeadin && (
           <div className="leadin">
-            <span
-              className="leadin__bpm"
-              style={{ background: display.targetBpmPulse ? 'var(--select-glow)' : 'transparent' }}
-            >
+            {/* Keyed on leadinFlashSeq so this remounts — and its flash
+                animation restarts — on every single lead-in beat. */}
+            <span key={state.leadinFlashSeq} className="leadin__bpm">
               {state.targetBpm}
             </span>
             <span className="leadin__label">BPM</span>
@@ -54,8 +53,8 @@ export default function MetronomeBar({ engine, display, isOpen, onToggleOpen, is
                 onChange={engine.handleBpmInput}
               />
             </div>
-            <button type="button" className="pill-button" onClick={engine.handleTapTempo}>
-              TAP TEMPO{isDesktop ? ' (X)' : ''}
+            <button type="button" className="pill-button" onClick={engine.openTapTempo}>
+              TAP
             </button>
 
             <div className="small-segmented">

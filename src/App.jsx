@@ -8,6 +8,7 @@ import TapArea from './components/TapArea.jsx'
 import JudgementFooter from './components/JudgementFooter.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import CalibrationModal from './components/CalibrationModal.jsx'
+import TapTempoModal from './components/TapTempoModal.jsx'
 
 export default function App() {
   const engine = useRhythmEngine()
@@ -57,7 +58,6 @@ export default function App() {
         display={display}
         isOpen={metronomeOpen}
         onToggleOpen={() => setMetronomeOpen((v) => !v)}
-        isDesktop={isDesktop}
       />
 
       <PatternBar
@@ -102,6 +102,10 @@ export default function App() {
           isDesktop={isDesktop}
           onClose={engine.closeCalibration}
         />
+      )}
+
+      {engine.state.tapTempoOpen && (
+        <TapTempoModal engine={engine} isDesktop={isDesktop} onClose={engine.closeTapTempo} />
       )}
     </div>
   )

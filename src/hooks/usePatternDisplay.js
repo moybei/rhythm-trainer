@@ -49,7 +49,6 @@ export function usePatternDisplay(state) {
     for (let i = 0; i < state.leadInTotal; i++) {
       leadinDots.push({ key: i, isFilled: i < filledCount })
     }
-    const targetBpmPulse = state.leadinCount % 2 === 0
 
     let calibrationStatusLabel
     if (state.calibrationResultMs !== null && !state.calibrationRunning) {
@@ -71,7 +70,6 @@ export function usePatternDisplay(state) {
       padR1Active: showPad && activeHand === 'R',
       padR2Active: showPad && activeHand === 'R',
       leadinDots,
-      targetBpmPulse,
       calibrationStatusLabel,
     }
   }, [state])
