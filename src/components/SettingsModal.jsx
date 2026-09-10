@@ -1,4 +1,5 @@
 import { KEYBIND_META } from '../data/patterns.js'
+import NumberField from './NumberField.jsx'
 
 function VolumeRow({ label, valuePercent, onChange }) {
   return (
@@ -37,11 +38,10 @@ export default function SettingsModal({ engine, isDesktop, onClose }) {
         >
           <div>
             <div className="field-label">Offset (ms)</div>
-            <input
-              type="number"
+            <NumberField
               className="field-input field-input--sm"
               value={state.offsetMs}
-              onChange={engine.handleOffsetInput}
+              onCommit={engine.handleOffsetInput}
             />
           </div>
           <button type="button" className="pill-button" onClick={engine.openCalibration}>

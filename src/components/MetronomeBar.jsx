@@ -1,4 +1,5 @@
 import { ChevronDownIcon, PauseIcon, PlayIcon } from './icons.jsx'
+import NumberField from './NumberField.jsx'
 
 export default function MetronomeBar({ engine, display, isOpen, onToggleOpen }) {
   const { state } = engine
@@ -46,11 +47,10 @@ export default function MetronomeBar({ engine, display, isOpen, onToggleOpen }) 
           <div className="metronome-drawer__row">
             <div>
               <div className="field-label">BPM</div>
-              <input
-                type="number"
+              <NumberField
                 className="field-input field-input--sm"
                 value={state.bpm}
-                onChange={engine.handleBpmInput}
+                onCommit={engine.handleBpmInput}
               />
             </div>
             <button type="button" className="pill-button" onClick={engine.openTapTempo}>
@@ -104,31 +104,28 @@ export default function MetronomeBar({ engine, display, isOpen, onToggleOpen }) 
             <div className="metronome-drawer__row">
               <div>
                 <div className="field-label">Lead-in beats</div>
-                <input
-                  type="number"
+                <NumberField
                   className="field-input field-input--sm"
                   value={state.leadIn}
-                  onChange={engine.handleLeadInInput}
+                  onCommit={engine.handleLeadInInput}
                 />
               </div>
               <div>
                 <div className="field-label">Ramp (+BPM)</div>
-                <input
-                  type="number"
+                <NumberField
                   className="field-input field-input--sm"
                   value={state.rampAmount}
-                  onChange={engine.handleRampAmountInput}
+                  onCommit={engine.handleRampAmountInput}
                 />
               </div>
               <div>
                 <div className="field-label">Every</div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <input
-                    type="number"
+                  <NumberField
                     className="field-input"
                     style={{ width: 80 }}
                     value={state.rampInterval}
-                    onChange={engine.handleRampIntervalInput}
+                    onCommit={engine.handleRampIntervalInput}
                   />
                   <div className="small-segmented small-segmented--tight">
                     <button
