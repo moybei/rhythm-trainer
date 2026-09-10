@@ -1,0 +1,10 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1440, "h": 900, "title": "Desktop" },
+    { "file": "Tablet.dc.html", "x": 1600, "y": 0, "w": 1194, "h": 834, "title": "Tablet — Landscape" }
+  ],
+  "annotations": [
+    { "id": "note-context", "x": 0, "y": -80, "w": 640, "text": "Desktop and Tablet are shown as two separate views for side-by-side comparison. The Desktop/Tablet pill in each header is illustrative here — in the real app it would switch modes on one page." }
+  ],
+  "launch": { "view": "canvas" }
+}

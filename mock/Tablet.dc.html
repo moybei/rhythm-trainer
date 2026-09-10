@@ -1,0 +1,368 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap">
+  <style>
+    :root {
+      --bg: oklch(0.16 0.012 260);
+      --panel: oklch(0.205 0.014 260);
+      --panel-2: oklch(0.245 0.014 260);
+      --border: oklch(1 0 0 / 10%);
+      --text: oklch(0.96 0.005 260);
+      --text-dim: oklch(0.72 0.01 260);
+      --text-faint: oklch(0.52 0.01 260);
+      --l: oklch(0.78 0.135 200);
+      --r: oklch(0.78 0.135 55);
+      --select-ring: oklch(0.78 0.135 300);
+      --select-glow: oklch(0.78 0.135 300 / 55%);
+      --danger: oklch(0.72 0.17 25);
+      --font-ui: 'Space Grotesk', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); }
+    a { color: var(--select-ring); text-decoration: none; }
+    a:hover { color: var(--l); }
+    button { font-family: var(--font-ui); }
+    input { font-family: var(--font-mono); }
+    input:focus { outline: 2px solid var(--select-ring); outline-offset: 2px; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: var(--panel-2); border-radius: 8px; }
+    @keyframes marqueeScroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+    .marquee-track { animation: marqueeScroll 7s linear infinite; }
+    .grp { margin-left: 22px; }
+  </style>
+</helmet>
+
+<div style="width:1194px; height:834px; overflow:hidden; display:flex; flex-direction:column; background:var(--bg); color:var(--text); font-family:var(--font-ui);">
+
+  <!-- HEADER -->
+  <div style="flex:0 0 56px; display:flex; align-items:center; justify-content:space-between; padding:0 22px; border-bottom:1px solid var(--border); background:var(--panel);">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="width:10px; height:10px; border-radius:50%; background:var(--select-ring); box-shadow:0 0 12px var(--select-glow);"></div>
+      <span style="font-weight:700; font-size:16px; letter-spacing:0.07em;">RUDIMENT</span>
+    </div>
+    <div style="display:flex; gap:4px; background:var(--panel-2); border:1px solid var(--border); border-radius:999px; padding:4px;">
+      <div style="padding:7px 16px; border-radius:999px; font-size:12px; font-weight:600; letter-spacing:0.03em; color:var(--text-dim);">Desktop</div>
+      <div style="padding:7px 16px; border-radius:999px; font-size:12px; font-weight:600; letter-spacing:0.03em; background:var(--select-ring); color:var(--bg);">Tablet</div>
+    </div>
+  </div>
+
+  <!-- CONTROL STRIP -->
+  <div style="flex:0 0 68px; display:flex; align-items:center; gap:12px; padding:10px 22px; border-bottom:1px solid var(--border);">
+    <div onClick="{{toggleMetronomeOpen}}" style="flex:0 0 auto; display:flex; align-items:center; gap:10px; padding:10px 16px; border-radius:12px; background:var(--panel); border:1px solid var(--border); cursor:pointer;">
+      <span style="font-weight:700; font-size:22px;">{{bpm}}</span>
+      <span style="font-size:10px; color:var(--text-faint); letter-spacing:0.08em;">BPM</span>
+      <span style="width:1px; height:18px; background:var(--border);"></span>
+      <span style="font-size:11px; color:var(--select-ring); font-weight:600;">{{bpmModeLabel}}</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style="transform:{{chevronRotate}};">
+        <path d="M6 9l6 6 6-6" stroke="var(--text-dim)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div style="flex:1; min-width:0; display:flex; gap:10px; overflow-x:auto; padding:2px;">
+      <sc-for list="{{patternCards}}" as="card" hint-placeholder-count="6">
+        <div onClick="{{card.pick}}" style="flex:0 0 auto; display:flex; align-items:center; gap:10px; padding:10px 16px; border-radius:12px; border:1px solid; cursor:pointer; white-space:nowrap; {{card.cardStyle}}">
+          <span style="font-weight:600; font-size:13px;">{{card.name}}</span>
+          <div style="display:flex; gap:3px;">
+            <sc-for list="{{card.previewShort}}" as="hit" hint-placeholder-count="4">
+              <div style="width:14px; height:14px; border-radius:4px; background:{{hit.dotColor}};"></div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- EXPANDED METRONOME CONFIG -->
+  <sc-if value="{{metronomeOpen}}" hint-placeholder-val="{{false}}">
+  <div style="flex:0 0 auto; display:flex; align-items:flex-end; gap:22px; flex-wrap:wrap; padding:16px 22px; background:var(--panel); border-bottom:1px solid var(--border);">
+    <div style="display:flex; gap:4px; background:var(--panel-2); border:1px solid var(--border); border-radius:10px; padding:4px;">
+      <button onClick="{{setStatic}}" style="padding:9px 18px; border-radius:8px; border:none; font-size:12px; font-weight:600; cursor:pointer; background:{{staticBg}}; color:{{staticColor}};">Static</button>
+      <button onClick="{{setProgrammed}}" style="padding:9px 18px; border-radius:8px; border:none; font-size:12px; font-weight:600; cursor:pointer; background:{{programmedBg}}; color:{{programmedColor}};">Programmed</button>
+    </div>
+    <button onClick="{{onTapTempo}}" style="padding:9px 22px; border-radius:999px; border:1px solid var(--border); background:var(--panel-2); color:var(--text); font-weight:600; font-size:12px; letter-spacing:0.05em; cursor:pointer;">TAP TEMPO</button>
+    <sc-if value="{{isProgrammed}}" hint-placeholder-val="{{false}}">
+      <div>
+        <div style="font-size:11px; color:var(--text-faint); margin-bottom:6px;">Lead-in beats</div>
+        <input type="number" value="{{leadIn}}" onChange="{{onLeadInInput}}" style="width:100px; padding:10px 12px; border-radius:8px; border:1px solid var(--border); background:var(--panel-2); color:var(--text); font-size:15px;" />
+      </div>
+      <div>
+        <div style="font-size:11px; color:var(--text-faint); margin-bottom:6px;">Ramp amount (+BPM)</div>
+        <input type="number" value="{{rampAmount}}" onChange="{{onRampAmountInput}}" style="width:100px; padding:10px 12px; border-radius:8px; border:1px solid var(--border); background:var(--panel-2); color:var(--text); font-size:15px;" />
+      </div>
+      <div>
+        <div style="font-size:11px; color:var(--text-faint); margin-bottom:6px;">Every</div>
+        <div style="display:flex; gap:8px;">
+          <input type="number" value="{{rampInterval}}" onChange="{{onRampIntervalInput}}" style="width:90px; padding:10px 12px; border-radius:8px; border:1px solid var(--border); background:var(--panel-2); color:var(--text); font-size:15px;" />
+          <div style="display:flex; gap:4px; background:var(--panel-2); border:1px solid var(--border); border-radius:8px; padding:3px;">
+            <button onClick="{{setRampBars}}" style="padding:7px 10px; border-radius:6px; border:none; font-size:11px; font-weight:600; cursor:pointer; background:{{barsBg}}; color:{{barsColor}};">Bars</button>
+            <button onClick="{{setRampTime}}" style="padding:7px 10px; border-radius:6px; border:none; font-size:11px; font-weight:600; cursor:pointer; background:{{timeBg}}; color:{{timeColor}};">Sec</button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <!-- SCORE STRIP -->
+  <div style="position:relative; flex:0 0 96px; margin:16px 22px 0; border-radius:14px; background:var(--panel); border:1px solid var(--border); overflow:hidden;">
+    <div style="position:absolute; inset:0; background-image:repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0 1px, transparent 1px 40px);"></div>
+    <div class="marquee-track" style="position:absolute; top:0; bottom:0; left:0; display:flex; align-items:center; gap:9px; padding:0 32px; white-space:nowrap;">
+      <sc-for list="{{scoreHits}}" as="hit" hint-placeholder-count="24">
+        <div class="{{hit.gapClass}}" style="display:flex; align-items:center; justify-content:center; width:38px; height:38px; flex:0 0 auto; border-radius:9px; background:{{hit.dotColor}}; box-shadow:{{hit.ring}};">
+          <span style="font-weight:700; font-size:15px; color:var(--bg);">{{hit.label}}</span>
+        </div>
+      </sc-for>
+      <sc-for list="{{scoreHits}}" as="hitb" hint-placeholder-count="24">
+        <div class="{{hitb.gapClass}}" style="display:flex; align-items:center; justify-content:center; width:38px; height:38px; flex:0 0 auto; border-radius:9px; background:{{hitb.dotColor}}; box-shadow:none;">
+          <span style="font-weight:700; font-size:15px; color:var(--bg);">{{hitb.label}}</span>
+        </div>
+      </sc-for>
+    </div>
+    <div style="position:absolute; left:80px; top:8px; bottom:8px; width:3px; border-radius:2px; background:var(--select-ring); box-shadow:0 0 16px 3px var(--select-glow);"></div>
+  </div>
+
+  <!-- TAP MODE TOGGLE -->
+  <div style="display:flex; justify-content:center; margin:14px 0 2px;">
+    <div style="display:flex; gap:4px; background:var(--panel-2); border:1px solid var(--border); border-radius:999px; padding:4px;">
+      <button onClick="{{setLR}}" style="padding:10px 24px; border-radius:999px; border:none; font-size:13px; font-weight:600; cursor:pointer; background:{{lrBg}}; color:{{lrColor}};">L / R</button>
+      <button onClick="{{setZone4}}" style="padding:10px 24px; border-radius:999px; border:none; font-size:13px; font-weight:600; cursor:pointer; background:{{zoneBg}}; color:{{zoneColor}};">4-Zone Placement</button>
+    </div>
+  </div>
+
+  <!-- TAPPING AREA -->
+  <div style="flex:1; min-height:0; padding:12px 22px;">
+    <sc-if value="{{isLR}}" hint-placeholder-val="{{true}}">
+    <div style="height:100%; display:flex; gap:14px;">
+      <div onClick="{{onTapLeft}}" style="flex:1; border-radius:20px; background:var(--panel); border:1px solid var(--border); box-shadow:{{leftRing}}; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+        <span style="font-size:96px; font-weight:700; color:var(--l);">L</span>
+      </div>
+      <div onClick="{{onTapRight}}" style="flex:1; border-radius:20px; background:var(--panel); border:1px solid var(--border); box-shadow:{{rightRing}}; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+        <span style="font-size:96px; font-weight:700; color:var(--r);">R</span>
+      </div>
+    </div>
+    </sc-if>
+    <sc-if value="{{isZone4}}" hint-placeholder-val="{{false}}">
+    <div style="height:100%; display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); grid-template-rows:repeat(2, minmax(0,1fr)); gap:14px;">
+      <div onClick="{{onTapZone}}" style="border-radius:20px; background:var(--panel); border:1px solid var(--border); box-shadow:{{zone1Ring}}; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+        <span style="font-size:56px; font-weight:700; color:var(--text);">1</span>
+      </div>
+      <div onClick="{{onTapZone}}" style="border-radius:20px; background:var(--panel); border:1px solid var(--border); box-shadow:{{zone2Ring}}; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+        <span style="font-size:56px; font-weight:700; color:var(--text);">2</span>
+      </div>
+      <div onClick="{{onTapZone}}" style="border-radius:20px; background:var(--panel); border:1px solid var(--border); box-shadow:{{zone3Ring}}; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+        <span style="font-size:56px; font-weight:700; color:var(--text);">3</span>
+      </div>
+      <div onClick="{{onTapZone}}" style="border-radius:20px; background:var(--panel); border:1px solid var(--border); box-shadow:{{zone4Ring}}; display:flex; align-items:center; justify-content:center; cursor:pointer;">
+        <span style="font-size:56px; font-weight:700; color:var(--text);">4</span>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+
+  <!-- FEEDBACK -->
+  <div style="flex:0 0 54px; display:flex; align-items:center; justify-content:center; gap:32px; border-top:1px solid var(--border); margin:0 22px;">
+    <div style="display:flex; align-items:baseline; gap:8px;">
+      <span style="font-size:11px; color:var(--text-faint); letter-spacing:0.08em; text-transform:uppercase;">Last</span>
+      <span style="font-weight:700; font-size:16px; color:{{judgementColor}};">{{judgement}}</span>
+    </div>
+    <div style="display:flex; align-items:baseline; gap:8px;">
+      <span style="font-size:11px; color:var(--text-faint); letter-spacing:0.08em; text-transform:uppercase;">Streak</span>
+      <span style="font-weight:700; font-size:16px;">{{streak}}</span>
+    </div>
+    <div style="display:flex; align-items:baseline; gap:8px;">
+      <span style="font-size:11px; color:var(--text-faint); letter-spacing:0.08em; text-transform:uppercase;">Accuracy</span>
+      <span style="font-weight:700; font-size:16px;">{{accuracyLabel}}</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script>
+const ZONE_CYCLE = [2, 3, 1, 4];
+const PATTERNS = [
+  { id: 'single', name: 'Single Stroke', unit: ['R','L'], group: 4, blurb: 'Alternating single hits' },
+  { id: 'double', name: 'Double Stroke', unit: ['L','L','R','R'], group: 4, blurb: 'Two hits per hand' },
+  { id: 'paradiddle', name: 'Single Paradiddle', unit: ['R','L','R','R','L','R','L','L'], group: 4, blurb: 'RLRR LRLL' },
+  { id: 'pdd', name: 'Paradiddle-Diddle', unit: ['R','L','R','R','L','L'], group: 6, blurb: 'RLR RLL' },
+  { id: 'triplet', name: 'Triplets', unit: ['R','L','R','L','R','L'], group: 3, blurb: 'Grouped in 3s' },
+  { id: 'sixstroke', name: 'Six-Stroke Roll', unit: ['R','R','L','L','R','L'], group: 6, blurb: 'RRLLRL' },
+];
+
+function buildHits(unit, group, total) {
+  const hits = [];
+  for (let i = 0; i < total; i++) {
+    const hand = unit[i % unit.length];
+    hits.push({
+      hand: hand,
+      zone: ZONE_CYCLE[i % ZONE_CYCLE.length],
+      groupStart: i % group === 0,
+    });
+  }
+  return hits;
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      bpm: 120,
+      bpmMode: 'static',
+      leadIn: 8,
+      rampAmount: 5,
+      rampUnit: 'bars',
+      rampInterval: 4,
+      tapMode: 'lr',
+      selectedPatternId: 'single',
+      tapCount: 0,
+      hitCount: 0,
+      streak: 0,
+      lastJudgement: '',
+      lastTapAt: null,
+      metronomeOpen: false,
+    };
+    this.handleBpmInput = this.handleBpmInput.bind(this);
+    this.handleLeadInInput = this.handleLeadInInput.bind(this);
+    this.handleRampAmountInput = this.handleRampAmountInput.bind(this);
+    this.handleRampIntervalInput = this.handleRampIntervalInput.bind(this);
+    this.handleTapTempo = this.handleTapTempo.bind(this);
+    this.registerTap = this.registerTap.bind(this);
+    this.toggleMetronomeOpen = this.toggleMetronomeOpen.bind(this);
+  }
+
+  handleBpmInput(e) {
+    const v = parseInt(e.target.value, 10);
+    if (!isNaN(v)) this.setState({ bpm: Math.max(20, Math.min(300, v)) });
+  }
+  handleLeadInInput(e) {
+    const v = parseInt(e.target.value, 10);
+    if (!isNaN(v)) this.setState({ leadIn: Math.max(0, Math.min(64, v)) });
+  }
+  handleRampAmountInput(e) {
+    const v = parseInt(e.target.value, 10);
+    if (!isNaN(v)) this.setState({ rampAmount: Math.max(1, Math.min(60, v)) });
+  }
+  handleRampIntervalInput(e) {
+    const v = parseInt(e.target.value, 10);
+    if (!isNaN(v)) this.setState({ rampInterval: Math.max(1, Math.min(999, v)) });
+  }
+  handleTapTempo() {
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const prev = this.state.lastTapAt;
+    let bpm = this.state.bpm;
+    if (prev != null) {
+      const delta = now - prev;
+      if (delta > 200 && delta < 2000) {
+        bpm = Math.max(40, Math.min(300, Math.round(60000 / delta)));
+      }
+    }
+    this.setState({ lastTapAt: now, bpm: bpm });
+  }
+  registerTap() {
+    const seq = ['Perfect', 'Perfect', 'Good', 'Perfect', 'Miss', 'Good', 'Perfect'];
+    const next = seq[this.state.tapCount % seq.length];
+    const isHit = next !== 'Miss';
+    this.setState((prev) => ({
+      tapCount: prev.tapCount + 1,
+      hitCount: prev.hitCount + (isHit ? 1 : 0),
+      streak: isHit ? prev.streak + 1 : 0,
+      lastJudgement: next,
+    }));
+  }
+  toggleMetronomeOpen() {
+    this.setState((prev) => ({ metronomeOpen: !prev.metronomeOpen }));
+  }
+
+  renderVals() {
+    const s = this.state;
+    const pattern = PATTERNS.find((p) => p.id === s.selectedPatternId) || PATTERNS[0];
+    const activeRing = '0 0 0 3px var(--select-ring), 0 0 30px 4px var(--select-glow)';
+
+    const rawHits = buildHits(pattern.unit, pattern.group, 24);
+    const scoreHits = rawHits.map((h, idx) => ({
+      label: s.tapMode === 'zone4' ? String(h.zone) : h.hand,
+      dotColor: h.hand === 'L' ? 'var(--l)' : 'var(--r)',
+      gapClass: h.groupStart && idx !== 0 ? 'grp' : '',
+      ring: idx === 0 ? activeRing : 'none',
+    }));
+
+    const patternCards = PATTERNS.map((p) => {
+      const previewShort = buildHits(p.unit, p.group, 4).map((h) => ({
+        dotColor: h.hand === 'L' ? 'var(--l)' : 'var(--r)',
+      }));
+      const selected = p.id === s.selectedPatternId;
+      return {
+        name: p.name,
+        previewShort: previewShort,
+        cardStyle: selected
+          ? 'border-color: var(--select-ring); background: var(--panel-2);'
+          : 'border-color: var(--border); background: var(--panel);',
+        pick: () => this.setState({ selectedPatternId: p.id }),
+      };
+    });
+
+    const acc = s.tapCount > 0 ? Math.round((s.hitCount / s.tapCount) * 100) : null;
+    const currentHand = rawHits[0].hand;
+    const currentZone = rawHits[0].zone;
+
+    return {
+      bpm: s.bpm,
+      bpmModeLabel: s.bpmMode === 'static' ? 'Static' : 'Programmed',
+      chevronRotate: s.metronomeOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+      metronomeOpen: s.metronomeOpen,
+      leadIn: s.leadIn,
+      rampAmount: s.rampAmount,
+      rampInterval: s.rampInterval,
+      isProgrammed: s.bpmMode === 'programmed',
+      staticBg: s.bpmMode === 'static' ? 'var(--select-ring)' : 'transparent',
+      staticColor: s.bpmMode === 'static' ? 'var(--bg)' : 'var(--text-dim)',
+      programmedBg: s.bpmMode === 'programmed' ? 'var(--select-ring)' : 'transparent',
+      programmedColor: s.bpmMode === 'programmed' ? 'var(--bg)' : 'var(--text-dim)',
+      barsBg: s.rampUnit === 'bars' ? 'var(--select-ring)' : 'transparent',
+      barsColor: s.rampUnit === 'bars' ? 'var(--bg)' : 'var(--text-dim)',
+      timeBg: s.rampUnit === 'time' ? 'var(--select-ring)' : 'transparent',
+      timeColor: s.rampUnit === 'time' ? 'var(--bg)' : 'var(--text-dim)',
+      isLR: s.tapMode === 'lr',
+      isZone4: s.tapMode === 'zone4',
+      lrBg: s.tapMode === 'lr' ? 'var(--select-ring)' : 'transparent',
+      lrColor: s.tapMode === 'lr' ? 'var(--bg)' : 'var(--text-dim)',
+      zoneBg: s.tapMode === 'zone4' ? 'var(--select-ring)' : 'transparent',
+      zoneColor: s.tapMode === 'zone4' ? 'var(--bg)' : 'var(--text-dim)',
+      leftRing: currentHand === 'L' ? activeRing : 'none',
+      rightRing: currentHand === 'R' ? activeRing : 'none',
+      zone1Ring: currentZone === 1 ? activeRing : 'none',
+      zone2Ring: currentZone === 2 ? activeRing : 'none',
+      zone3Ring: currentZone === 3 ? activeRing : 'none',
+      zone4Ring: currentZone === 4 ? activeRing : 'none',
+      scoreHits: scoreHits,
+      patternCards: patternCards,
+      judgement: s.lastJudgement || 'Tap to begin',
+      judgementColor: s.lastJudgement === 'Miss' ? 'var(--danger)' : (s.lastJudgement ? 'var(--select-ring)' : 'var(--text-faint)'),
+      streak: s.streak,
+      accuracyLabel: acc === null ? '—' : (acc + '%'),
+      setStatic: () => this.setState({ bpmMode: 'static' }),
+      setProgrammed: () => this.setState({ bpmMode: 'programmed' }),
+      setRampBars: () => this.setState({ rampUnit: 'bars', rampInterval: 4 }),
+      setRampTime: () => this.setState({ rampUnit: 'time', rampInterval: 60 }),
+      setLR: () => this.setState({ tapMode: 'lr' }),
+      setZone4: () => this.setState({ tapMode: 'zone4' }),
+      toggleMetronomeOpen: this.toggleMetronomeOpen,
+      onBpmInput: this.handleBpmInput,
+      onLeadInInput: this.handleLeadInInput,
+      onRampAmountInput: this.handleRampAmountInput,
+      onRampIntervalInput: this.handleRampIntervalInput,
+      onTapTempo: this.handleTapTempo,
+      onTapLeft: this.registerTap,
+      onTapRight: this.registerTap,
+      onTapZone: this.registerTap,
+    };
+  }
+}
+</script>
+</body>
+</html>
