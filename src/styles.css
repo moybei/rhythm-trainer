@@ -11,6 +11,8 @@
   --select-ring: oklch(0.78 0.135 300);
   --select-glow: oklch(0.78 0.135 300 / 55%);
   --danger: oklch(0.72 0.17 25);
+  --fast: oklch(0.72 0.16 255);
+  --late: oklch(0.72 0.17 25);
   --font-ui: 'Space Grotesk', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
   --active-ring: 0 0 0 3px var(--select-ring), 0 0 30px 4px var(--select-glow);
@@ -488,6 +490,7 @@ input:focus {
   gap: 14px;
 }
 .lr-zone {
+  position: relative;
   flex: 1;
   border-radius: 20px;
   background: var(--panel);
@@ -544,6 +547,37 @@ input:focus {
   font-size: 11px;
   color: var(--text-faint);
   letter-spacing: 0.08em;
+}
+
+/* FAST/LATE badge — sits above the letter in both L/R zones and 4-pad mode.
+   Re-keyed on every tap (see TapFeedback in TapArea.jsx) so this animation
+   restarts on each new judged tap instead of only running once. */
+.tap-feedback {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  pointer-events: none;
+  animation: tap-feedback-in 150ms ease-out;
+}
+.tap-feedback--fast {
+  color: var(--fast);
+}
+.tap-feedback--late {
+  color: var(--late);
+}
+@keyframes tap-feedback-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
 /* ---------- judgement footer ---------- */

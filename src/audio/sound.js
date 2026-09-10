@@ -51,7 +51,9 @@ const loadingCache = new Map()
 async function tryLoad(ctx, fileBase, extIndex = 0) {
   if (extIndex >= EXTENSIONS.length) return null
   try {
-    const res = await fetch(`/sounds/${fileBase}.${EXTENSIONS[extIndex]}`)
+    // BASE_URL (not a hardcoded leading "/") so this still resolves once the
+    // app is deployed under a subpath, e.g. GitHub Pages at /rhythm-trainer/.
+    const res = await fetch(`${import.meta.env.BASE_URL}sounds/${fileBase}.${EXTENSIONS[extIndex]}`)
     if (!res.ok) return tryLoad(ctx, fileBase, extIndex + 1)
     const arrayBuffer = await res.arrayBuffer()
     return await ctx.decodeAudioData(arrayBuffer)
@@ -105,7 +107,7 @@ function playSampleOrFallback(ctx, key, time, gain, fallback) {
 // the audio is merged. Base levels are tuned quieter than the metronome
 // click (which peaks at 0.35); `volume` layers the user's slider on top.
 export function playHitSound(ctx, time, tier, volume = 1) {
-  if (tier === 'critical' || tier === 'perfect') {
+  if (tier === 'critical' || tier === 'perfect' || tier === 'idle') {
     playSampleOrFallback(ctx, 'answer', time, 0.5 * volume, () => {
       playTone(ctx, time, 1500, 0.06, 0.16 * volume, 'sine')
     })

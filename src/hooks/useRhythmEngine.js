@@ -25,6 +25,7 @@ const initialState = {
   judgementMode: 'maimai',
   judgementCounts: { critical: 0, perfect: 0, great: 0, good: 0, miss: 0 },
   missedIndex: -1,
+  tapFeedback: null, // { pad, direction: 'fast' | 'late', seq } — transient, not persisted
 
   isPlaying: false,
   activeIndex: -1,
@@ -138,6 +139,8 @@ export function useRhythmEngine() {
   const currentHitsRef = useRef([])
   const lastPatternIdRef = useRef(null)
   const missedIndexTimerRef = useRef(null)
+  const tapFeedbackSeqRef = useRef(0)
+  const tapFeedbackTimerRef = useRef(null)
 
   const calSchedulerTimerRef = useRef(null)
   const calNextTimeRef = useRef(0)
@@ -259,52 +262,81 @@ export function useRhythmEngine() {
   const cancelRebind = useCallback(() => patch({ rebindingAction: null }), [patch])
 
   // ---- judged tap (real-time, maimai-style windows) ----
-  const registerJudgedTap = useCallback(() => {
-    const s = stateRef.current
-    const ctx = ensureAudioCtx()
-    if (!s.isPlaying || scheduledEventsRef.current.length === 0) {
-      // Nothing playing to judge against — still confirm the pad/key works
-      // with an audible hit sound, just with no tier and no count.
-      if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, 'great', s.hitSoundVolume)
-      return
-    }
-    const now = ctx.currentTime - s.offsetMs / 1000
-    let nearest = null
-    let bestDelta = Infinity
-    for (const ev of scheduledEventsRef.current) {
-      const d = Math.abs(ev.time - now)
-      if (d < bestDelta) {
-        bestDelta = d
-        nearest = ev
+  // `padId` (one of 'L' | 'R' | 'L1' | 'R1' | 'L2' | 'R2') identifies which
+  // button/key triggered this tap, purely so the FAST/LATE badge can be
+  // shown on that specific button — timing judgement itself doesn't care
+  // which pad was hit, only when.
+  const registerJudgedTap = useCallback(
+    (padId) => {
+      const s = stateRef.current
+      const ctx = ensureAudioCtx()
+      if (!s.isPlaying || scheduledEventsRef.current.length === 0) {
+        // Nothing playing to judge against — still confirm the pad/key works
+        // with an audible hit sound (same sample as a Perfect hit), just with
+        // no tier, no count, and no FAST/LATE badge (nothing to be early or
+        // late relative to).
+        if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, 'idle', s.hitSoundVolume)
+        return
       }
-    }
-    if (!nearest) return
-    const deltaMs = bestDelta * 1000
-    let tier
-    if (deltaMs <= 16.66) tier = 'critical'
-    else if (deltaMs <= 50) tier = 'perfect'
-    else if (deltaMs <= 100) tier = 'great'
-    else if (deltaMs <= 150) tier = 'good'
-    else tier = 'miss'
+      const now = ctx.currentTime - s.offsetMs / 1000
+      let nearest = null
+      let bestAbsDelta = Infinity
+      let bestSignedDelta = 0
+      for (const ev of scheduledEventsRef.current) {
+        const signed = ev.time - now // positive: beat is still ahead (tap was early/FAST); negative: beat already passed (tap was LATE)
+        const d = Math.abs(signed)
+        if (d < bestAbsDelta) {
+          bestAbsDelta = d
+          bestSignedDelta = signed
+          nearest = ev
+        }
+      }
+      if (!nearest) return
+      const deltaMs = bestAbsDelta * 1000
+      let tier
+      if (deltaMs <= 16.66) tier = 'critical'
+      else if (deltaMs <= 50) tier = 'perfect'
+      else if (deltaMs <= 100) tier = 'great'
+      else if (deltaMs <= 150) tier = 'good'
+      else tier = 'miss'
 
-    if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, tier, s.hitSoundVolume)
+      if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, tier, s.hitSoundVolume)
 
-    if (tier === 'miss') {
-      if (missedIndexTimerRef.current) clearTimeout(missedIndexTimerRef.current)
-      const missIdx = nearest.rowIndex
-      patch((prev) => ({
-        missedIndex: missIdx,
-        judgementCounts: { ...prev.judgementCounts, miss: prev.judgementCounts.miss + 1 },
-      }))
-      missedIndexTimerRef.current = setTimeout(() => {
-        patch({ missedIndex: -1 })
-      }, 450)
-    } else {
-      patch((prev) => ({
-        judgementCounts: { ...prev.judgementCounts, [tier]: prev.judgementCounts[tier] + 1 },
-      }))
-    }
-  }, [patch, ensureAudioCtx])
+      // Critical Perfect is treated as "on time" — no FAST/LATE badge.
+      // Every other tier (including Miss) shows which way you drifted.
+      if (padId) {
+        if (tapFeedbackTimerRef.current) clearTimeout(tapFeedbackTimerRef.current)
+        if (tier === 'critical') {
+          patch({ tapFeedback: null })
+        } else {
+          const direction = bestSignedDelta > 0 ? 'fast' : 'late'
+          tapFeedbackSeqRef.current += 1
+          const seq = tapFeedbackSeqRef.current
+          patch({ tapFeedback: { pad: padId, direction, seq } })
+          tapFeedbackTimerRef.current = setTimeout(() => {
+            patch((prev) => (prev.tapFeedback && prev.tapFeedback.seq === seq ? { tapFeedback: null } : {}))
+          }, 600)
+        }
+      }
+
+      if (tier === 'miss') {
+        if (missedIndexTimerRef.current) clearTimeout(missedIndexTimerRef.current)
+        const missIdx = nearest.rowIndex
+        patch((prev) => ({
+          missedIndex: missIdx,
+          judgementCounts: { ...prev.judgementCounts, miss: prev.judgementCounts.miss + 1 },
+        }))
+        missedIndexTimerRef.current = setTimeout(() => {
+          patch({ missedIndex: -1 })
+        }, 450)
+      } else {
+        patch((prev) => ({
+          judgementCounts: { ...prev.judgementCounts, [tier]: prev.judgementCounts[tier] + 1 },
+        }))
+      }
+    },
+    [patch, ensureAudioCtx],
+  )
 
   // Bumps the tempo and, if lead-in beats are configured, re-runs the
   // count-in at the new BPM before the pattern resumes — a ramp is never
@@ -599,9 +631,14 @@ export function useRhythmEngine() {
         return
       }
       const b = s.keyBinds
-      if (key === b.L || key === b.R || key === b.L1 || key === b.R1 || key === b.L2 || key === b.R2) {
-        registerJudgedTap()
-      }
+      let padId = null
+      if (key === b.L) padId = 'L'
+      else if (key === b.R) padId = 'R'
+      else if (key === b.L1) padId = 'L1'
+      else if (key === b.R1) padId = 'R1'
+      else if (key === b.L2) padId = 'L2'
+      else if (key === b.R2) padId = 'R2'
+      if (padId) registerJudgedTap(padId)
     },
     [patch, handleTapTempo, registerJudgedTap, registerCalibrationTap],
   )
@@ -614,6 +651,7 @@ export function useRhythmEngine() {
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
       if (calSchedulerTimerRef.current) clearInterval(calSchedulerTimerRef.current)
       if (missedIndexTimerRef.current) clearTimeout(missedIndexTimerRef.current)
+      if (tapFeedbackTimerRef.current) clearTimeout(tapFeedbackTimerRef.current)
     }
   }, [handleKeyDown])
 
