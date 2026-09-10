@@ -1,7 +1,15 @@
+import { useRef } from 'react'
 import { ChevronDownIcon, SwapIcon } from './icons.jsx'
+import { useFitFontSize } from '../hooks/useFitFontSize.js'
 
 export default function PatternBar({ engine, display, isOpen, onToggleOpen, onClose }) {
   const { state } = engine
+  const rowsRef = useRef(null)
+  // Refit whenever the actual note layout could change shape — a different
+  // pattern, or hands swapped (same beat count, but worth a re-measure for
+  // safety); row highlighting/misses change far more often and don't affect
+  // the row's width, so they're deliberately not in this list.
+  useFitFontSize(rowsRef, [display.pattern.id, state.mirrored])
 
   return (
     <div className="pattern-bar" onClick={onToggleOpen}>
@@ -41,7 +49,7 @@ export default function PatternBar({ engine, display, isOpen, onToggleOpen, onCl
           ))}
         </div>
       ) : (
-        <div className="display-rows">
+        <div className="display-rows" ref={rowsRef}>
           {display.displayRows.map((row, rowIdx) => (
             <div className="display-row" key={rowIdx}>
               {row.beats.map((beat) => (

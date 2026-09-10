@@ -18,7 +18,7 @@ export function usePatternDisplay(state) {
         for (let n = 0; n < row.group; n++) {
           const globalIdx = cursor + b * row.group + n
           const hand = hits[globalIdx].hand
-          const isMissed = globalIdx === state.missedIndex
+          const isMissed = state.missedIndices.includes(globalIdx)
           notes.push({
             key: globalIdx,
             label: hand,

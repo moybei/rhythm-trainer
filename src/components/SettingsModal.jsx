@@ -63,6 +63,11 @@ export default function SettingsModal({ engine, isDesktop, onClose }) {
           onChange={engine.handleHitSoundVolumeInput}
         />
         <VolumeRow
+          label="Miss sound"
+          valuePercent={Math.round(state.missSoundVolume * 100)}
+          onChange={engine.handleMissSoundVolumeInput}
+        />
+        <VolumeRow
           label="Guide sound"
           valuePercent={Math.round(state.guideVolume * 100)}
           onChange={engine.handleGuideVolumeInput}

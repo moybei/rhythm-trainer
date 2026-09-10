@@ -5,15 +5,31 @@ const PAD_POSITIONS = {
   R2: { left: '80%', top: '66%' },
 }
 
-// FAST/LATE badge shown above a pad's letter after a judged tap. Keyed on
-// `feedback.seq` so React remounts the span (not just updates its text) on
-// every new tap, which restarts the fade-in animation even if the same pad
-// scores the same direction twice in a row.
+// Badge shown above a pad's letter after a judged tap (or an auto-missed
+// note, for `pad`s representing that note's hand). Keyed on `feedback.seq`
+// so React remounts the span (not just updates its text) on every new tap,
+// which restarts the fade-in animation even if the same badge repeats.
+//   - Critical Perfect: no badge at all (nothing patches tapFeedback for it)
+//   - Perfect: just FAST/LATE, no tier label
+//   - Great / Good: FAST/LATE on top, the colored tier name underneath
+//   - Miss: no direction (a miss is never "early" or "late") — just "Miss"
 function TapFeedback({ feedback, pad }) {
-  if (!feedback || feedback.pad !== pad) return null
+  if (!feedback || !feedback.targets.includes(pad)) return null
+  const { tier, direction, seq } = feedback
+  if (tier === 'miss') {
+    return (
+      <span key={seq} className="tap-feedback">
+        <span className="tap-feedback__tier tap-feedback__tier--miss">Miss</span>
+      </span>
+    )
+  }
+  const tierLabel = tier === 'great' ? 'Great' : tier === 'good' ? 'Good' : null
   return (
-    <span key={feedback.seq} className={`tap-feedback tap-feedback--${feedback.direction}`}>
-      {feedback.direction === 'fast' ? 'FAST' : 'LATE'}
+    <span key={seq} className="tap-feedback">
+      <span className={`tap-feedback__direction tap-feedback__direction--${direction}`}>
+        {direction === 'fast' ? 'FAST' : 'LATE'}
+      </span>
+      {tierLabel && <span className={`tap-feedback__tier tap-feedback__tier--${tier}`}>{tierLabel}</span>}
     </span>
   )
 }

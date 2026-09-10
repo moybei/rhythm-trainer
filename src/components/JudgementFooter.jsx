@@ -23,16 +23,16 @@ export default function JudgementFooter({ engine, judgementModeOpen, onToggleJud
           </div>
         )}
       </div>
-      <span className="judgement-count">
+      <span className="judgement-count judgement-count--yellow">
         Critical Perfect <b>{counts.critical}</b>
       </span>
-      <span className="judgement-count">
+      <span className="judgement-count judgement-count--yellow">
         Perfect <b>{counts.perfect}</b>
       </span>
-      <span className="judgement-count">
+      <span className="judgement-count judgement-count--pink">
         Great <b>{counts.great}</b>
       </span>
-      <span className="judgement-count">
+      <span className="judgement-count judgement-count--green">
         Good <b>{counts.good}</b>
       </span>
       <span className="judgement-count judgement-count--miss">

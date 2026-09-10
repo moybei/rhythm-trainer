@@ -13,6 +13,9 @@
   --danger: oklch(0.72 0.17 25);
   --fast: oklch(0.72 0.16 255);
   --late: oklch(0.72 0.17 25);
+  --tier-yellow: oklch(0.85 0.17 95); /* Critical Perfect + Perfect */
+  --tier-pink: oklch(0.75 0.16 350); /* Great */
+  --tier-green: oklch(0.78 0.16 145); /* Good */
   --font-ui: 'Space Grotesk', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
   --active-ring: 0 0 0 3px var(--select-ring), 0 0 30px 4px var(--select-glow);
@@ -401,9 +404,13 @@ input:focus {
 }
 .display-note {
   font-family: var(--font-mono);
-  font-size: 18px;
+  /* Set by useFitFontSize (PatternBar.jsx) as an inline style on
+     .display-rows — shrinks just enough that the widest row fits the
+     screen instead of overflowing off its edge. 18px is the untouched,
+     "fits fine" default. */
+  font-size: var(--note-font-size, 18px);
   font-weight: 700;
-  transition: transform 0.06s ease, color 0.08s ease;
+  transition: transform 0.06s ease, color 0.08s ease, font-size 0.1s ease;
   transform: scale(1);
   text-shadow: none;
 }
@@ -418,6 +425,8 @@ input:focus {
   min-height: 0;
   position: relative;
   padding: 16px 28px 20px;
+  container-type: size; /* lets .pad size itself against the space actually available here */
+  container-name: tap-area;
 }
 .mode-pill {
   position: absolute;
@@ -532,8 +541,16 @@ input:focus {
 .pad {
   position: absolute;
   transform: translate(-50%, -50%);
+  /* Caps at the original tuned size on a roomy desktop canvas, but shrinks
+     proportionally with the actual space under it (container query units,
+     not viewport units) on a small/short screen instead of overflowing or
+     overlapping its neighbors. Plain px first as a fallback for browsers
+     without container query unit support (an unsupported value is ignored,
+     leaving the line above it in effect). */
   width: 200px;
   height: 150px;
+  width: min(200px, 26cqw);
+  height: min(150px, 30cqh);
   border-radius: 22px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -558,25 +575,47 @@ input:focus {
   letter-spacing: 0.08em;
 }
 
-/* FAST/LATE badge — sits above the letter in both L/R zones and 4-pad mode.
-   Re-keyed on every tap (see TapFeedback in TapArea.jsx) so this animation
-   restarts on each new judged tap instead of only running once. */
+/* FAST/LATE(+tier) / Miss badge — sits above the letter in both L/R zones
+   and 4-pad mode. Re-keyed on every tap or auto-miss (see TapFeedback in
+   TapArea.jsx) so this animation restarts each time instead of only once. */
 .tap-feedback {
   position: absolute;
-  top: 16px;
+  top: 14px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.09em;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
   pointer-events: none;
   animation: tap-feedback-in 150ms ease-out;
 }
-.tap-feedback--fast {
+.tap-feedback__direction {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+}
+.tap-feedback__direction--fast {
   color: var(--fast);
 }
-.tap-feedback--late {
+.tap-feedback__direction--late {
   color: var(--late);
+}
+.tap-feedback__tier {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.tap-feedback__tier--great {
+  color: var(--tier-pink);
+}
+.tap-feedback__tier--good {
+  color: var(--tier-green);
+}
+.tap-feedback__tier--miss {
+  color: var(--danger);
+  font-size: 13px;
 }
 @keyframes tap-feedback-in {
   from {
@@ -650,6 +689,24 @@ input:focus {
 }
 .judgement-count--miss b {
   color: var(--danger);
+}
+.judgement-count--yellow {
+  color: var(--tier-yellow);
+}
+.judgement-count--yellow b {
+  color: var(--tier-yellow);
+}
+.judgement-count--pink {
+  color: var(--tier-pink);
+}
+.judgement-count--pink b {
+  color: var(--tier-pink);
+}
+.judgement-count--green {
+  color: var(--tier-green);
+}
+.judgement-count--green b {
+  color: var(--tier-green);
 }
 .judgement-footer__actions {
   margin-left: auto;
@@ -756,6 +813,8 @@ input:focus {
 .app.is-tablet .pad {
   width: 190px;
   height: 145px;
+  width: min(190px, 26cqw);
+  height: min(145px, 30cqh);
 }
 .app.is-tablet .pad__letter {
   font-size: 52px;

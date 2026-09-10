@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { currentPattern, flattenPattern, DEFAULT_KEYBINDS } from '../data/patterns.js'
+import { currentPattern, flattenPattern, DEFAULT_KEYBINDS, handForPad, padsForHand } from '../data/patterns.js'
 import { playClick, playGuide, playHitSound, playLeadInClick, preloadSamples } from '../audio/sound.js'
+
+// A note stays judgeable for this long on either side of its scheduled
+// time — the same window as the Good tier's outer edge. Once it closes
+// without a correct-hand tap, the note auto-resolves to a Miss.
+const GOOD_WINDOW_MS = 150
+const GOOD_WINDOW_SEC = GOOD_WINDOW_MS / 1000
 
 const initialState = {
   bpm: 120,
@@ -25,8 +31,8 @@ const initialState = {
 
   judgementMode: 'maimai',
   judgementCounts: { critical: 0, perfect: 0, great: 0, good: 0, miss: 0 },
-  missedIndex: -1,
-  tapFeedback: null, // { pad, direction: 'fast' | 'late', seq } — transient, not persisted
+  missedIndices: [], // hit indices missed so far *this loop* — reset at each rep boundary
+  tapFeedback: null, // { targets: [padId,...], tier, direction: 'fast' | 'late' | null, seq } — transient, not persisted
 
   isPlaying: false,
   activeIndex: -1,
@@ -41,6 +47,7 @@ const initialState = {
 
   metronomeVolume: 1,
   hitSoundVolume: 1,
+  missSoundVolume: 1,
   guideVolume: 1,
 
   calibrationOpen: false,
@@ -73,6 +80,7 @@ const PERSISTED_KEYS = [
   'keyBinds',
   'metronomeVolume',
   'hitSoundVolume',
+  'missSoundVolume',
   'guideVolume',
 ]
 
@@ -137,10 +145,11 @@ export function useRhythmEngine() {
   const repsSinceRampRef = useRef(0)
   const pendingRampRef = useRef(false)
   const rampStartTimeRef = useRef(0)
-  const scheduledEventsRef = useRef([]) // [{time, rowIndex}]
+  const scheduledEventsRef = useRef([]) // [{time, rowIndex, hand, judged}]
   const currentHitsRef = useRef([])
   const lastPatternIdRef = useRef(null)
-  const missedIndexTimerRef = useRef(null)
+  const missedIndicesRef = useRef(new Set()) // hit indices missed so far this loop
+  const lastActiveRepRef = useRef(0) // which lap through the pattern the display has cleared missed-marks for
   const tapFeedbackSeqRef = useRef(0)
   const tapFeedbackTimerRef = useRef(null)
   const leadinFlashSeqRef = useRef(0)
@@ -151,15 +160,40 @@ export function useRhythmEngine() {
   const calScheduledBeatTimesRef = useRef([])
   const calDeltasRef = useRef([])
 
+  // Anchors performance.now() to AudioContext.currentTime once, so a
+  // keydown's `event.timeStamp` (same clock as performance.now()) can be
+  // converted into audio-clock time. That lets judgement use the moment the
+  // browser actually received the key event instead of the moment our JS
+  // callback happened to run — removing event-queue/task-scheduling jitter
+  // from the input side of timing.
+  const clockAnchorRef = useRef({ perfNow: 0, audioTime: 0 })
+  const perfToAudioTime = useCallback((perfTimeStamp) => {
+    const { perfNow, audioTime } = clockAnchorRef.current
+    return audioTime + (perfTimeStamp - perfNow) / 1000
+  }, [])
+
   const ensureAudioCtx = useCallback(() => {
     if (!audioCtxRef.current) {
       const AC = window.AudioContext || window.webkitAudioContext
       audioCtxRef.current = new AC()
       preloadSamples(audioCtxRef.current)
+      clockAnchorRef.current = {
+        perfNow: performance.now(),
+        audioTime: audioCtxRef.current.currentTime,
+      }
     }
     if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
     return audioCtxRef.current
   }, [])
+
+  // Red "missed" note coloring accumulates over one loop of the pattern and
+  // resets at the next rep boundary (see scheduleOneEvent) — also reset
+  // explicitly on pattern switch, playback start/stop, and a manual count
+  // reset, so stale red marks never linger from a different pattern or run.
+  const clearMissedIndices = useCallback(() => {
+    missedIndicesRef.current.clear()
+    patch({ missedIndices: [] })
+  }, [patch])
 
   // ---- simple field setters ----
   const handleBpmInput = useCallback(
@@ -210,6 +244,15 @@ export function useRhythmEngine() {
     (e) => {
       const v = parseInt(e.target.value, 10)
       if (!Number.isNaN(v)) patch({ hitSoundVolume: Math.max(0, Math.min(150, v)) / 100 })
+    },
+    [patch],
+  )
+  // Separate from hitSoundVolume so Miss can be dragged to 0% (muted)
+  // independently of the Critical/Perfect/Great/Good hit sounds.
+  const handleMissSoundVolumeInput = useCallback(
+    (e) => {
+      const v = parseInt(e.target.value, 10)
+      if (!Number.isNaN(v)) patch({ missSoundVolume: Math.max(0, Math.min(150, v)) / 100 })
     },
     [patch],
   )
@@ -270,7 +313,13 @@ export function useRhythmEngine() {
   }, [patch])
 
   const setTapMode = useCallback((mode) => patch({ tapMode: mode }), [patch])
-  const selectPattern = useCallback((id) => patch({ selectedPatternId: id }), [patch])
+  const selectPattern = useCallback(
+    (id) => {
+      clearMissedIndices()
+      patch({ selectedPatternId: id })
+    },
+    [patch, clearMissedIndices],
+  )
   const toggleMirror = useCallback(() => patch((prev) => ({ mirrored: !prev.mirrored })), [patch])
   const toggleAccent = useCallback(() => patch((prev) => ({ accentEnabled: !prev.accentEnabled })), [patch])
   const toggleGuide = useCallback(() => patch((prev) => ({ guideEnabled: !prev.guideEnabled })), [patch])
@@ -280,88 +329,111 @@ export function useRhythmEngine() {
     [patch],
   )
   const setJudgementMode = useCallback((mode) => patch({ judgementMode: mode }), [patch])
-  const resetJudgementCounts = useCallback(
-    () => patch({ judgementCounts: { critical: 0, perfect: 0, great: 0, good: 0, miss: 0 } }),
-    [patch],
-  )
+  const resetJudgementCounts = useCallback(() => {
+    clearMissedIndices()
+    patch({ judgementCounts: { critical: 0, perfect: 0, great: 0, good: 0, miss: 0 } })
+  }, [patch, clearMissedIndices])
   const startRebind = useCallback((action) => patch({ rebindingAction: action }), [patch])
   const cancelRebind = useCallback(() => patch({ rebindingAction: null }), [patch])
 
+  // Shows a FAST/LATE(+tier) or Miss badge on every pad id in `targets` —
+  // the exact tapped pad for a real tap, or every pad representing a hand
+  // for an auto-miss timeout (no tap to anchor to). Re-keyed each call so
+  // the CSS fade-in restarts even if the same badge repeats back-to-back.
+  const showTapFeedback = useCallback(
+    (targets, tier, direction) => {
+      if (tapFeedbackTimerRef.current) clearTimeout(tapFeedbackTimerRef.current)
+      tapFeedbackSeqRef.current += 1
+      const seq = tapFeedbackSeqRef.current
+      patch({ tapFeedback: { targets, tier, direction, seq } })
+      tapFeedbackTimerRef.current = setTimeout(() => {
+        patch((prev) => (prev.tapFeedback && prev.tapFeedback.seq === seq ? { tapFeedback: null } : {}))
+      }, 600)
+    },
+    [patch],
+  )
+
   // ---- judged tap (real-time, maimai-style windows) ----
   // `padId` (one of 'L' | 'R' | 'L1' | 'R1' | 'L2' | 'R2') identifies which
-  // button/key triggered this tap, purely so the FAST/LATE badge can be
-  // shown on that specific button — timing judgement itself doesn't care
-  // which pad was hit, only when.
+  // button/key triggered this tap — both for the FAST/LATE badge, and now
+  // for judging whether it's even the right hand for the note it's closest
+  // to. Each scheduled note is judged (or auto-missed) exactly once: a tap
+  // only ever matches a note that's both unjudged and still inside its
+  // active window, so a stray tap can't reach back and "steal" a judgement
+  // from a note it wasn't actually near.
   const registerJudgedTap = useCallback(
-    (padId) => {
+    (padId, eventTimeStamp) => {
       const s = stateRef.current
       const ctx = ensureAudioCtx()
       if (!s.isPlaying || scheduledEventsRef.current.length === 0) {
         // Nothing playing to judge against — still confirm the pad/key works
         // with an audible hit sound (same sample as a Perfect hit), just with
-        // no tier, no count, and no FAST/LATE badge (nothing to be early or
-        // late relative to).
+        // no tier, no count, and no badge (nothing to be early or late
+        // relative to, and no note to have hit the wrong hand for).
         if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, 'idle', s.hitSoundVolume)
         return
       }
-      const now = ctx.currentTime - s.offsetMs / 1000
+      // Prefer the browser's own timestamp for when it received the key
+      // event (mapped into audio-clock time) over "whenever this callback
+      // happened to run" — the latter can lag the real keypress by a task
+      // or a frame under load, which registers as extra input jitter.
+      const rawNow = eventTimeStamp != null ? perfToAudioTime(eventTimeStamp) : ctx.currentTime
+      const now = rawNow - s.offsetMs / 1000
+      const tappedHand = handForPad(padId)
+
       let nearest = null
       let bestAbsDelta = Infinity
       let bestSignedDelta = 0
       for (const ev of scheduledEventsRef.current) {
+        if (ev.judged) continue
         const signed = ev.time - now // positive: beat is still ahead (tap was early/FAST); negative: beat already passed (tap was LATE)
         const d = Math.abs(signed)
+        if (d > GOOD_WINDOW_SEC) continue // outside any note's active window — not a candidate
         if (d < bestAbsDelta) {
           bestAbsDelta = d
           bestSignedDelta = signed
           nearest = ev
         }
       }
-      if (!nearest) return
+
+      if (!nearest) {
+        // No open note within reach — a stray tap. Still responsive, but
+        // nothing to judge (matches the "not playing" fallback above).
+        if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, 'idle', s.hitSoundVolume)
+        return
+      }
+
+      if (nearest.hand !== tappedHand) {
+        // Wrong hand: this note is left open (not consumed) so the correct
+        // hand can still hit it before the window closes, or it'll be
+        // auto-missed like any other unhit note. The pad actually pressed
+        // still gets clear "that was wrong" feedback.
+        if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, 'miss', s.missSoundVolume)
+        if (padId) showTapFeedback([padId], 'miss', null)
+        return
+      }
+
       const deltaMs = bestAbsDelta * 1000
       let tier
       if (deltaMs <= 16.66) tier = 'critical'
       else if (deltaMs <= 50) tier = 'perfect'
       else if (deltaMs <= 100) tier = 'great'
-      else if (deltaMs <= 150) tier = 'good'
-      else tier = 'miss'
+      else tier = 'good' // candidates are pre-filtered to <= GOOD_WINDOW_MS above
 
+      nearest.judged = true
       if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, tier, s.hitSoundVolume)
 
-      // Critical Perfect is treated as "on time" — no FAST/LATE badge.
-      // Every other tier (including Miss) shows which way you drifted.
-      if (padId) {
-        if (tapFeedbackTimerRef.current) clearTimeout(tapFeedbackTimerRef.current)
-        if (tier === 'critical') {
-          patch({ tapFeedback: null })
-        } else {
-          const direction = bestSignedDelta > 0 ? 'fast' : 'late'
-          tapFeedbackSeqRef.current += 1
-          const seq = tapFeedbackSeqRef.current
-          patch({ tapFeedback: { pad: padId, direction, seq } })
-          tapFeedbackTimerRef.current = setTimeout(() => {
-            patch((prev) => (prev.tapFeedback && prev.tapFeedback.seq === seq ? { tapFeedback: null } : {}))
-          }, 600)
-        }
+      // Critical Perfect is treated as "on time" — no badge at all.
+      if (padId && tier !== 'critical') {
+        const direction = bestSignedDelta > 0 ? 'fast' : 'late'
+        showTapFeedback([padId], tier, direction)
       }
 
-      if (tier === 'miss') {
-        if (missedIndexTimerRef.current) clearTimeout(missedIndexTimerRef.current)
-        const missIdx = nearest.rowIndex
-        patch((prev) => ({
-          missedIndex: missIdx,
-          judgementCounts: { ...prev.judgementCounts, miss: prev.judgementCounts.miss + 1 },
-        }))
-        missedIndexTimerRef.current = setTimeout(() => {
-          patch({ missedIndex: -1 })
-        }, 450)
-      } else {
-        patch((prev) => ({
-          judgementCounts: { ...prev.judgementCounts, [tier]: prev.judgementCounts[tier] + 1 },
-        }))
-      }
+      patch((prev) => ({
+        judgementCounts: { ...prev.judgementCounts, [tier]: prev.judgementCounts[tier] + 1 },
+      }))
     },
-    [patch, ensureAudioCtx],
+    [patch, ensureAudioCtx, perfToAudioTime, showTapFeedback],
   )
 
   // Bumps the tempo and, if lead-in beats are configured, re-runs the
@@ -419,7 +491,15 @@ export function useRhythmEngine() {
           repsSinceRampRef.current = 0
           pendingRampRef.current = false
           rampStartTimeRef.current = nextNoteTimeRef.current
-          patch({ inLeadin: false, bpm: Math.round(currentBpmRef.current) })
+          // hitCounterRef resetting to 0 means the next hit's `rep` also
+          // starts over at 0 (see scheduleOneEvent below) — follow suit here
+          // so a post-ramp restart doesn't leave lastActiveRepRef stranded
+          // at whatever (larger) lap number play had reached pre-ramp, which
+          // would otherwise stop the loop-boundary clear from ever firing
+          // again. Also clear any marks left over from before the ramp.
+          lastActiveRepRef.current = 0
+          if (missedIndicesRef.current.size > 0) missedIndicesRef.current.clear()
+          patch({ inLeadin: false, bpm: Math.round(currentBpmRef.current), missedIndices: [] })
         }
         return
       }
@@ -452,8 +532,17 @@ export function useRhythmEngine() {
       if (s.guideEnabled) playGuide(ctx, time, hand, s.guideVolume)
 
       const rowIndex = hitCounterRef.current % total
-      scheduledEventsRef.current.push({ time, rowIndex })
-      if (scheduledEventsRef.current.length > 96) scheduledEventsRef.current.shift()
+      const rep = Math.floor(hitCounterRef.current / total) // which lap through the pattern this hit belongs to
+      // (The "new loop started, clear red missed marks" reset lives in
+      // updateHighlight, not here — see there for why.)
+      scheduledEventsRef.current.push({ time, rowIndex, hand, judged: false, rep })
+      // Only ever trim already-resolved (judged) events off the front — an
+      // unjudged one hasn't been through the auto-miss sweep yet, and
+      // discarding it here would silently drop that note's miss instead of
+      // ever counting it.
+      while (scheduledEventsRef.current.length > 96 && scheduledEventsRef.current[0].judged) {
+        scheduledEventsRef.current.shift()
+      }
 
       hitCounterRef.current++
       const subDur = 60 / currentBpmRef.current / group
@@ -485,20 +574,73 @@ export function useRhythmEngine() {
 
   const updateHighlight = useCallback(() => {
     if (!stateRef.current.isPlaying || !audioCtxRef.current) return
-    const now = audioCtxRef.current.currentTime
+    const ctx = audioCtxRef.current
+    const now = ctx.currentTime
+    const s = stateRef.current
+
+    // Auto-miss sweep: any note whose window has fully closed without a
+    // correct-hand tap resolves to a Miss on its own — this is what makes
+    // simply not tapping anything reliably score Miss/Miss/Miss instead of
+    // silently doing nothing.
+    let missCount = 0
+    let lastMissedHand = null
+    for (const ev of scheduledEventsRef.current) {
+      if (!ev.judged && now - ev.time > GOOD_WINDOW_SEC) {
+        ev.judged = true
+        missedIndicesRef.current.add(ev.rowIndex)
+        missCount++
+        lastMissedHand = ev.hand
+      }
+    }
+
     let idx = -1
+    let repAtIdx = -1
     for (let i = scheduledEventsRef.current.length - 1; i >= 0; i--) {
       if (scheduledEventsRef.current[i].time <= now) {
         idx = scheduledEventsRef.current[i].rowIndex
+        repAtIdx = scheduledEventsRef.current[i].rep
         break
       }
     }
-    if (idx !== stateRef.current.activeIndex) patch({ activeIndex: idx })
+
+    // A later lap than the one we last cleared for means a new loop through
+    // the pattern has started — clear last loop's red "missed" marks right
+    // here, in the same place misses get added, so the two can never race
+    // against each other (they used to live in different functions —
+    // scheduling vs. this rAF loop — which could interleave unpredictably).
+    // Comparing lap NUMBERS (not "did the index decrease") also survives a
+    // big catch-up jump spanning more than one full lap in a single frame
+    // (e.g. after the tab was backgrounded) without misfiring or missing it.
+    const looped = repAtIdx !== -1 && repAtIdx > lastActiveRepRef.current
+    if (looped) {
+      missedIndicesRef.current.clear()
+      lastActiveRepRef.current = repAtIdx
+    }
+
+    if (missCount > 0) {
+      if (s.hitSoundEnabled) playHitSound(ctx, now, 'miss', s.missSoundVolume)
+      if (lastMissedHand) showTapFeedback(padsForHand(lastMissedHand), 'miss', null)
+    }
+
+    if (missCount > 0 || looped || idx !== s.activeIndex) {
+      patch((prev) => ({
+        ...(missCount > 0 && { judgementCounts: { ...prev.judgementCounts, miss: prev.judgementCounts.miss + missCount } }),
+        ...((missCount > 0 || looped) && { missedIndices: Array.from(missedIndicesRef.current) }),
+        ...(idx !== s.activeIndex && { activeIndex: idx }),
+      }))
+    }
     rafIdRef.current = requestAnimationFrame(updateHighlight)
-  }, [patch])
+  }, [patch, showTapFeedback])
 
   const startPlayback = useCallback(() => {
     const ctx = ensureAudioCtx()
+    // Re-anchor the perf-clock/audio-clock mapping every time playback
+    // starts, not just once at AudioContext creation — the two clocks can
+    // be driven by separate hardware oscillators (CPU timer vs. audio
+    // device clock) that slowly drift apart the longer they both run. This
+    // caps how much of that drift ever reaches judgement to whatever
+    // accumulates within one play session, instead of a whole page lifetime.
+    clockAnchorRef.current = { perfNow: performance.now(), audioTime: ctx.currentTime }
     const s = stateRef.current
     currentBpmRef.current = s.bpm
     hitCounterRef.current = 0
@@ -512,6 +654,8 @@ export function useRhythmEngine() {
     phaseRef.current = leadBeatsRemainingRef.current > 0 ? 'leadin' : 'pattern'
     nextNoteTimeRef.current = ctx.currentTime + 0.12
     scheduledEventsRef.current = []
+    missedIndicesRef.current.clear()
+    lastActiveRepRef.current = 0
     patch({
       isPlaying: true,
       activeIndex: -1,
@@ -519,6 +663,7 @@ export function useRhythmEngine() {
       leadinCount: leadBeatsRemainingRef.current,
       leadInTotal: leadBeatsRemainingRef.current,
       targetBpm: Math.round(currentBpmRef.current),
+      missedIndices: [],
     })
     schedulerTimerRef.current = setInterval(scheduleTick, 25)
     rafIdRef.current = requestAnimationFrame(updateHighlight)
@@ -529,7 +674,8 @@ export function useRhythmEngine() {
     if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
     schedulerTimerRef.current = null
     rafIdRef.current = null
-    patch({ isPlaying: false, activeIndex: -1, inLeadin: false })
+    missedIndicesRef.current.clear()
+    patch({ isPlaying: false, activeIndex: -1, inLeadin: false, missedIndices: [] })
   }, [patch])
 
   const togglePlay = useCallback(() => {
@@ -577,6 +723,9 @@ export function useRhythmEngine() {
 
   const startCalibrationSequence = useCallback(() => {
     const ctx = ensureAudioCtx()
+    // Same reasoning as startPlayback: keep the measured offset from ever
+    // absorbing perf-clock/audio-clock drift accumulated before this run.
+    clockAnchorRef.current = { perfNow: performance.now(), audioTime: ctx.currentTime }
     calBeatIndexRef.current = 0
     calScheduledBeatTimesRef.current = []
     calDeltasRef.current = []
@@ -599,13 +748,16 @@ export function useRhythmEngine() {
     patch({ calibrationOpen: false, calibrationRunning: false })
   }, [patch])
 
-  const registerCalibrationTap = useCallback(() => {
+  const registerCalibrationTap = useCallback((eventTimeStamp) => {
     // Deliberately NOT gated on calibrationRunning: the click sequence can
     // finish playing before the user gets their 8th tap in, and that last
     // tap should still count against the final scheduled beat.
     if (calScheduledBeatTimesRef.current.length === 0 || calDeltasRef.current.length >= 8) return
-    const ctx = audioCtxRef.current
-    const now = ctx.currentTime
+    // Same audio-clock-mapped timestamp as registerJudgedTap, so the offset
+    // this measures matches what future taps will actually be judged
+    // against (otherwise calibration would bake in a slightly different
+    // jitter profile than real play).
+    const now = eventTimeStamp != null ? perfToAudioTime(eventTimeStamp) : audioCtxRef.current.currentTime
     let bestDelta = Infinity
     let nearestTime = null
     for (const t of calScheduledBeatTimesRef.current) {
@@ -629,7 +781,7 @@ export function useRhythmEngine() {
       }
       patch({ offsetMs: Math.max(-300, Math.min(300, rounded)), calibrationResultMs: rounded, calibrationRunning: false })
     }
-  }, [patch])
+  }, [patch, perfToAudioTime])
 
   // ---- keyboard input (desktop) ----
   const handleKeyDown = useCallback(
@@ -652,7 +804,7 @@ export function useRhythmEngine() {
       // to accept keyboard taps at all: calibrating with a mouse click
       // wouldn't measure the same input path a keyboard player actually uses.
       if (s.calibrationOpen) {
-        if (key === 'X') registerCalibrationTap()
+        if (key === 'X') registerCalibrationTap(e.timeStamp)
         return
       }
 
@@ -671,7 +823,7 @@ export function useRhythmEngine() {
       else if (key === b.R1) padId = 'R1'
       else if (key === b.L2) padId = 'L2'
       else if (key === b.R2) padId = 'R2'
-      if (padId) registerJudgedTap(padId)
+      if (padId) registerJudgedTap(padId, e.timeStamp)
     },
     [patch, registerTapTempoTap, registerJudgedTap, registerCalibrationTap],
   )
@@ -683,7 +835,6 @@ export function useRhythmEngine() {
       if (schedulerTimerRef.current) clearInterval(schedulerTimerRef.current)
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
       if (calSchedulerTimerRef.current) clearInterval(calSchedulerTimerRef.current)
-      if (missedIndexTimerRef.current) clearTimeout(missedIndexTimerRef.current)
       if (tapFeedbackTimerRef.current) clearTimeout(tapFeedbackTimerRef.current)
     }
   }, [handleKeyDown])
@@ -698,6 +849,7 @@ export function useRhythmEngine() {
     handleOffsetInput,
     handleMetronomeVolumeInput,
     handleHitSoundVolumeInput,
+    handleMissSoundVolumeInput,
     handleGuideVolumeInput,
     openTapTempo,
     closeTapTempo,

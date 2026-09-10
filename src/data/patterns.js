@@ -80,3 +80,16 @@ export const KEYBIND_META = [
 ]
 
 export const DEFAULT_KEYBINDS = { L: 'D', R: 'K', L1: '5', L2: 'R', R1: '6', R2: 'Y' }
+
+// Which hand a pad/zone id represents, for judging whether a tap hit the
+// hand the pattern actually called for at that moment.
+export function handForPad(padId) {
+  return padId === 'R' || padId === 'R1' || padId === 'R2' ? 'R' : 'L'
+}
+
+// The pad ids that visually represent a given hand — both L pads (or the
+// single L zone) light up together for an 'L' note, matching how the
+// existing target-pad highlight already treats L1/L2 (or R1/R2) as one unit.
+export function padsForHand(hand) {
+  return hand === 'R' ? ['R', 'R1', 'R2'] : ['L', 'L1', 'L2']
+}
