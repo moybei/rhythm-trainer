@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { chatterStats } from '../utils/chatterFilter.js'
+import { tapRepairStats } from '../utils/tapTimestampRepair.js'
 
 // Records every event of one type at the document level in the capture
 // phase — before TapArea's own listener, before React, before anything
@@ -14,7 +15,7 @@ import { chatterStats } from '../utils/chatterFilter.js'
 // measure. The overlay now repaints on a slow timer instead, and the tap
 // path stays as light with it open as without.
 function useEventRecorder(eventName, filter) {
-  const ref = useRef({ intervals: [], ages: [], events: 0, touches: 0 })
+  const ref = useRef({ intervals: [], ages: [], events: 0, touches: 0, padTouches: 0 })
   const lastRef = useRef(null)
 
   useEffect(() => {
@@ -28,6 +29,14 @@ function useEventRecorder(eventName, filter) {
       // instead of touches would make that look like a dropped tap, which
       // is the exact question this panel is here to answer.
       rec.touches += e.changedTouches ? e.changedTouches.length : 1
+      // Of those, the ones that actually landed on a pad. Without this, a
+      // tap on the play button or on this very overlay is indistinguishable
+      // from a pad tap the engine lost — which is the whole question the
+      // counters beside it exist to answer. Computed here rather than in
+      // TapArea so the diagnostic adds no work to the real input path.
+      for (const pt of e.changedTouches ? Array.from(e.changedTouches) : [e]) {
+        if (pt.target && pt.target.closest && pt.target.closest('[data-tap-pad]')) rec.padTouches++
+      }
       if (lastRef.current != null) {
         rec.intervals.push(Math.round(now - lastRef.current))
         if (rec.intervals.length > 30) rec.intervals.shift()
@@ -88,11 +97,11 @@ const fmt = (v) => (v == null ? 'n/a' : Math.round(v * 100) / 100)
 // end, so that is what these numbers should be sanity-checked against
 // rather than summed.
 //
-// "touches vs events vs judged vs chatter-rejected" catches taps going
-// missing: touches is what the digitiser reported, events is how many
-// dispatches carried them, judged is how many reached the engine, and
-// chatter-rejected is how many this app threw away on purpose. Those
-// diverging means input is being lost, and the four together say where.
+// The counter line catches taps going missing, and says where: "on a
+// pad" is what the digitiser reported landing on one, "judged" is how
+// many reached the engine, "chatter-rejected" is how many this app threw
+// away on purpose, and "repaired" is how many carried a timestamp iOS had
+// collapsed onto the previous tap's and had to have rebuilt.
 export default function TapTimingDebug({ engine }) {
   const touch = useEventRecorder('touchstart')
   const pointer = useEventRecorder('pointerdown', (e) => e.pointerType !== 'touch')
@@ -125,7 +134,8 @@ export default function TapTimingDebug({ engine }) {
             c.scheduleCount
           }\n`
         : 'AUDIO — (tap once to start the audio engine)\n'
-      out += `        touches ${t.touches} / events ${t.events} / judged ${engine.judgedTapCountRef.current} / chatter-rejected ${chatter.rejectedCount}\n`
+      out += `        touches ${t.touches} (on a pad: ${t.padTouches}) / events ${t.events} / judged ${engine.judgedTapCountRef.current}\n`
+      out += `        chatter-rejected ${chatter.rejectedCount} / collapsed timestamps repaired ${tapRepairStats().repairedCount}\n`
       if (chatter.recent.length) {
         out += `        rejected: ${chatter.recent.map((r) => `${r.key} ev+${r.eventGap} arr+${r.arrivalGap}`).join(' | ')}\n`
       }

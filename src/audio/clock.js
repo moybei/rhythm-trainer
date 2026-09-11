@@ -204,6 +204,15 @@ export function createAudioClock(ctx) {
     return sorted[idx] / 1000
   }
 
+  // The median recent delivery delay — the best single estimate of when
+  // a tap actually happened, for the case where its own timestamp is
+  // known to be wrong. See utils/tapTimestampRepair.js.
+  function typicalHandlerDelaySec() {
+    if (handlerDelays.length === 0) return 0
+    const sorted = handlerDelays.map((d) => d.delayMs).sort((a, b) => a - b)
+    return sorted[Math.floor((sorted.length - 1) / 2)] / 1000
+  }
+
   function worstHandlerDelaySec() {
     let worst = 0
     for (const d of handlerDelays) if (d.delayMs > worst) worst = d.delayMs
@@ -293,6 +302,7 @@ export function createAudioClock(ctx) {
       blockMs: blockSec * 1000,
       lookaheadMs: reactionLookaheadSec() * 1000,
       handlerDelayMs: handlerDelaySec() * 1000,
+      typicalHandlerDelayMs: typicalHandlerDelaySec() * 1000,
       worstHandlerDelayMs: worstHandlerDelaySec() * 1000,
       sampleRate: ctx.sampleRate,
       baseLatencyMs: typeof ctx.baseLatency === 'number' ? ctx.baseLatency * 1000 : null,
@@ -311,5 +321,5 @@ export function createAudioClock(ctx) {
   takeSample()
   timer = setInterval(takeSample, SAMPLE_INTERVAL_MS)
 
-  return { now, perfToAudio, reactionTime, reactionLookaheadSec, reset, stats, dispose }
+  return { now, perfToAudio, reactionTime, reactionLookaheadSec, typicalHandlerDelaySec, reset, stats, dispose }
 }

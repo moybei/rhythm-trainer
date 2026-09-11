@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { currentPattern, flattenPattern, DEFAULT_KEYBINDS, handForPad, padsForHand } from '../data/patterns.js'
 import { playClick, playGuide, playHitSound, playLeadInClick, preloadSamples } from '../audio/sound.js'
 import { createAudioClock } from '../audio/clock.js'
+import { createTapTimestampRepair } from '../utils/tapTimestampRepair.js'
 
 // A note stays judgeable for this long on either side of its scheduled
 // time — the same window as the Good tier's outer edge. Once it closes
@@ -181,6 +182,19 @@ export function useRhythmEngine() {
   // {performance.now(), ctx.currentTime} pair is not good enough for either
   // job on a device with a large audio buffer.
   const clockRef = useRef(null)
+
+  // Every judged or calibration tap goes through here first, so a
+  // timestamp iOS collapsed onto the previous tap's gets rebuilt before
+  // anything is scored against it. One shared instance across pads and
+  // keys, because a delivery stall collapses whatever it happens to be
+  // carrying, not one particular pad.
+  const repairTapTimeRef = useRef(null)
+  if (repairTapTimeRef.current === null) repairTapTimeRef.current = createTapTimestampRepair()
+  const repairTapTime = useCallback((eventTimeStamp) => {
+    const clock = clockRef.current
+    if (!clock || eventTimeStamp == null) return eventTimeStamp
+    return repairTapTimeRef.current(eventTimeStamp, clock.typicalHandlerDelaySec() * 1000)
+  }, [])
 
   const ensureAudioCtx = useCallback(() => {
     if (!audioCtxRef.current) {
@@ -417,6 +431,7 @@ export function useRhythmEngine() {
     (padId, eventTimeStamp) => {
       const s = stateRef.current
       const ctx = ensureAudioCtx()
+      eventTimeStamp = repairTapTime(eventTimeStamp)
       // The confirmation sound is scheduled a fixed interval after THIS
       // TAP — derived from the tap's own event timestamp, not from a fresh
       // ctx.currentTime read. Reading the clock here felt like the most
@@ -492,7 +507,7 @@ export function useRhythmEngine() {
         judgementCounts: { ...prev.judgementCounts, [tier]: prev.judgementCounts[tier] + 1 },
       }))
     },
-    [patch, ensureAudioCtx, perfToAudioTime, showTapFeedback],
+    [patch, ensureAudioCtx, perfToAudioTime, showTapFeedback, repairTapTime],
   )
 
   // Bumps the tempo and, if lead-in beats are configured, re-runs the
@@ -817,7 +832,7 @@ export function useRhythmEngine() {
     // this measures matches what future taps will actually be judged
     // against (otherwise calibration would bake in a slightly different
     // jitter profile than real play).
-    const now = perfToAudioTime(eventTimeStamp)
+    const now = perfToAudioTime(repairTapTime(eventTimeStamp))
     let bestDelta = Infinity
     let nearestTime = null
     for (const t of calScheduledBeatTimesRef.current) {
@@ -841,7 +856,7 @@ export function useRhythmEngine() {
       }
       patch({ offsetMs: Math.max(-300, Math.min(300, rounded)), calibrationResultMs: rounded, calibrationRunning: false })
     }
-  }, [patch, perfToAudioTime])
+  }, [patch, perfToAudioTime, repairTapTime])
 
   // ---- keyboard input (desktop) ----
   const handleKeyDown = useCallback(
