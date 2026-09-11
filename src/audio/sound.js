@@ -136,26 +136,45 @@ function playSampleOrFallback(ctx, key, time, gain, fallback) {
   fallback()
 }
 
+// Every other sound in this app (metronome, guide, count-in) is triggered
+// from the lookahead scheduler, so it's always requested well ahead of
+// ctx.currentTime and lands exactly on schedule. The hit sound is the one
+// exception — it's reactive, requested at essentially ctx.currentTime the
+// instant a tap is judged, because there's no way to know in advance when
+// the player will tap. Asking Web Audio to start a sound AT (or behind)
+// currentTime forces it to snap forward to the nearest audio-callback
+// boundary it can still hit, and that snap distance isn't fixed — it's
+// however far the request happened to land from that boundary, which
+// varies call to call. Desktop callback periods are small enough (a few
+// ms) that this is inaudible; mobile devices commonly run much larger
+// callback/buffer periods, so the same pattern produces clearly uneven
+// timing between taps even when the taps themselves were perfectly even.
+// A small fixed lookahead gives the audio thread a stable target instead
+// of a moving one, at the cost of a small constant (not random) delay
+// between the physical tap and hearing its confirmation.
+const HIT_SOUND_LOOKAHEAD_SEC = 0.03
+
 // Judgement feedback. Critical Perfect and Perfect intentionally share one
 // sound (se_game_answer) — the footer still counts them separately, only
 // the audio is merged. Base levels are tuned quieter than the metronome
 // click (which peaks at 0.35); `volume` layers the user's slider on top.
 export function playHitSound(ctx, time, tier, volume = 1) {
+  const t = time + HIT_SOUND_LOOKAHEAD_SEC
   if (tier === 'critical' || tier === 'perfect' || tier === 'idle') {
-    playSampleOrFallback(ctx, 'answer', time, 0.5 * volume, () => {
-      playTone(ctx, time, 1500, 0.06, 0.16 * volume, 'sine')
+    playSampleOrFallback(ctx, 'answer', t, 0.5 * volume, () => {
+      playTone(ctx, t, 1500, 0.06, 0.16 * volume, 'sine')
     })
   } else if (tier === 'great') {
-    playSampleOrFallback(ctx, 'great', time, 0.5 * volume, () => {
-      playTone(ctx, time, 1000, 0.06, 0.14 * volume, 'triangle')
+    playSampleOrFallback(ctx, 'great', t, 0.5 * volume, () => {
+      playTone(ctx, t, 1000, 0.06, 0.14 * volume, 'triangle')
     })
   } else if (tier === 'good') {
-    playSampleOrFallback(ctx, 'good', time, 0.5 * volume, () => {
-      playTone(ctx, time, 700, 0.07, 0.12 * volume, 'triangle')
+    playSampleOrFallback(ctx, 'good', t, 0.5 * volume, () => {
+      playTone(ctx, t, 700, 0.07, 0.12 * volume, 'triangle')
     })
   } else {
     // Miss has no named sample in this request — keep the synthesized buzz.
-    playTone(ctx, time, 220, 0.12, 0.18 * volume, 'sawtooth')
+    playTone(ctx, t, 220, 0.12, 0.18 * volume, 'sawtooth')
   }
 }
 
