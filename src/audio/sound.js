@@ -5,6 +5,29 @@
 // Every play*() function takes a trailing `volume` multiplier (default 1)
 // so the per-category volume sliders in Settings can scale it.
 
+// Every voice routes through one shared limiter on the way to the speakers
+// (like a DAW's master bus) instead of straight to ctx.destination — full,
+// untruncated polyphonic playback (every tap plays its whole sample,
+// however many overlap) is exactly what a real sampler/DAW does; what a
+// mixing console adds on top is gain-staging so that overlap never turns
+// into harsh digital clipping. A DynamicsCompressorNode set up as a brick-
+// wall-ish limiter is the Web Audio equivalent. One per AudioContext.
+const masterBusCache = new WeakMap()
+function getMasterBus(ctx) {
+  let bus = masterBusCache.get(ctx)
+  if (!bus) {
+    bus = ctx.createDynamicsCompressor()
+    bus.threshold.setValueAtTime(-6, ctx.currentTime)
+    bus.knee.setValueAtTime(6, ctx.currentTime)
+    bus.ratio.setValueAtTime(16, ctx.currentTime)
+    bus.attack.setValueAtTime(0.003, ctx.currentTime)
+    bus.release.setValueAtTime(0.15, ctx.currentTime)
+    bus.connect(ctx.destination)
+    masterBusCache.set(ctx, bus)
+  }
+  return bus
+}
+
 export function playTone(ctx, time, freq, duration, gainPeak, type) {
   const osc = ctx.createOscillator()
   const gain = ctx.createGain()
@@ -14,7 +37,7 @@ export function playTone(ctx, time, freq, duration, gainPeak, type) {
   gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, gainPeak), time + 0.002)
   gain.gain.exponentialRampToValueAtTime(0.0001, time + duration)
   osc.connect(gain)
-  gain.connect(ctx.destination)
+  gain.connect(getMasterBus(ctx))
   osc.start(time)
   osc.stop(time + duration + 0.02)
 }
@@ -85,7 +108,11 @@ function playBuffer(ctx, buffer, time, gain) {
   g.gain.setValueAtTime(Math.max(0, gain), time)
   source.buffer = buffer
   source.connect(g)
-  g.connect(ctx.destination)
+  // Full, untruncated playback every time, straight through the shared
+  // limiter — as many overlapping copies as get triggered, exactly like a
+  // real sampler/DAW; the limiter (not truncation) is what keeps that from
+  // ever turning into harsh clipping.
+  g.connect(getMasterBus(ctx))
   // Explicitly release the nodes once playback ends instead of leaving it
   // to garbage collection — cheap insurance against ever accumulating
   // enough dead nodes in a long session to matter on a low-power device.
