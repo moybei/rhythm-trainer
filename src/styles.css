@@ -38,6 +38,11 @@ body {
   color: var(--text);
   font-family: var(--font-ui);
   overflow: hidden;
+  /* Backstop for the viewport meta's user-scalable=no — some browsers/
+     accessibility settings ignore that, but respect this. Disallows pinch-
+     and double-tap-zoom app-wide while still leaving panning available
+     (scrollable modals like Settings set their own touch-action to use it). */
+  touch-action: pan-x pan-y;
 }
 
 a {
