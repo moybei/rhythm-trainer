@@ -1,14 +1,5 @@
 import { useEffect, useRef } from 'react'
-
-// No human can deliberately land two separate taps faster than this — a
-// gap smaller than it is touchscreen "chatter": a single hard, fast
-// contact physically bouncing on the glass and getting sensed by the
-// digitizer as two separate touch-down events a few milliseconds apart
-// (the same phenomenon as mechanical switch bounce). Confirmed via a raw
-// touch-timing diagnostic on a real device: genuine 0ms gaps between
-// reported pointerdown events during fast tapping, which is physically
-// impossible as two intentional taps.
-const CHATTER_DEBOUNCE_MS = 25
+import { createChatterFilter } from '../utils/chatterFilter.js'
 
 // Attaches raw native listeners directly to the given ref's element,
 // bypassing React's synthetic event system entirely — same reasoning as
@@ -32,16 +23,18 @@ export function useNativePointerDown(ref, onPointerDown) {
     handlerRef.current = onPointerDown
   })
 
-  const lastAcceptedRef = useRef(null)
+  // Single-button, so one filter key is enough. See
+  // utils/chatterFilter.js for why a timestamp gap alone is not enough to
+  // identify a bounce on iOS.
+  const acceptChatterRef = useRef(null)
+  if (acceptChatterRef.current === null) acceptChatterRef.current = createChatterFilter()
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
 
     const accept = (e) => {
-      const last = lastAcceptedRef.current
-      if (last != null && e.timeStamp - last < CHATTER_DEBOUNCE_MS) return // touchscreen chatter, not a second tap
-      lastAcceptedRef.current = e.timeStamp
+      if (!acceptChatterRef.current('tap', e.timeStamp)) return // touchscreen chatter, not a second tap
       handlerRef.current(e)
     }
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { createChatterFilter } from '../utils/chatterFilter.js'
 
 const PAD_POSITIONS = {
   L1: { left: '37%', top: '26%' },
@@ -15,16 +16,6 @@ const PAD_POSITIONS = {
 //   - Perfect: just FAST/LATE, no tier label
 //   - Great / Good: FAST/LATE on top, the colored tier name underneath
 //   - Miss: no direction (a miss is never "early" or "late") — just "Miss"
-// No human can deliberately land two separate, distinct hits on the same
-// pad faster than this — a gap smaller than it is touchscreen "chatter": a
-// single hard, fast contact physically bouncing on the glass and getting
-// sensed by the digitizer as two separate touch-down events a few
-// milliseconds apart (the same phenomenon as mechanical switch bounce).
-// Confirmed via a raw touch-timing diagnostic on a real device: genuine
-// 0ms gaps between reported pointerdown events during fast single-pad
-// tapping, which is physically impossible as two intentional taps.
-const CHATTER_DEBOUNCE_MS = 25
-
 function TapFeedback({ feedback, pad }) {
   if (!feedback || !feedback.targets.includes(pad)) return null
   const { tier, direction, seq } = feedback
@@ -72,17 +63,17 @@ export default function TapArea({ engine, display, isDesktop, modePickerOpen, on
     registerJudgedTapRef.current = engine.registerJudgedTap
   })
 
-  // Per-pad last-accepted timestamp, for the chatter debounce below.
-  const lastAcceptedRef = useRef({})
+  // Per-pad chatter filter — see utils/chatterFilter.js for why a
+  // timestamp gap alone is not enough to identify a bounce on iOS.
+  const acceptChatterRef = useRef(null)
+  if (acceptChatterRef.current === null) acceptChatterRef.current = createChatterFilter()
 
   useEffect(() => {
     const el = tapAreaRef.current
     if (!el) return
 
     const acceptTap = (padId, timeStamp) => {
-      const last = lastAcceptedRef.current[padId]
-      if (last != null && timeStamp - last < CHATTER_DEBOUNCE_MS) return // touchscreen chatter, not a second tap
-      lastAcceptedRef.current[padId] = timeStamp
+      if (!acceptChatterRef.current(padId, timeStamp)) return // touchscreen chatter, not a second tap
       registerJudgedTapRef.current(padId, timeStamp)
     }
 

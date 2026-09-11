@@ -294,10 +294,6 @@ export function createAudioClock(ctx) {
       lookaheadMs: reactionLookaheadSec() * 1000,
       handlerDelayMs: handlerDelaySec() * 1000,
       worstHandlerDelayMs: worstHandlerDelaySec() * 1000,
-      // What the player actually waits between finger and ear: the
-      // lookahead we add, plus however long the OS takes to get the
-      // finished audio out of the speaker.
-      tapToEarMs: reactionLookaheadSec() * 1000 + (typeof ctx.outputLatency === 'number' ? ctx.outputLatency * 1000 : 0),
       sampleRate: ctx.sampleRate,
       baseLatencyMs: typeof ctx.baseLatency === 'number' ? ctx.baseLatency * 1000 : null,
       outputLatencyMs: typeof ctx.outputLatency === 'number' ? ctx.outputLatency * 1000 : null,

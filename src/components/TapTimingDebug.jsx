@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { chatterStats } from '../utils/chatterFilter.js'
 
 // Records every event of one type at the document level in the capture
 // phase — before TapArea's own listener, before React, before anything
@@ -74,15 +75,24 @@ const fmt = (v) => (v == null ? 'n/a' : Math.round(v * 100) / 100)
 //     hands by what you hear (latency).
 //
 // "SOUND spacing" against "TAP spacing" settles the first two: if SOUND
-// tracks TAP, output is clean and anything left is input. "tap -> ear"
-// settles the third, and it is the one people misread as unevenness —
-// past roughly 100ms the auditory feedback loop stops working and the
-// tapping itself degrades, which looks like an app bug and isn't.
+// tracks TAP, output is clean and anything left is input.
 //
-// "touches vs events vs judged" catches taps going missing: touches is
-// what the digitiser reported, events is how many dispatches carried
-// them, judged is how many actually reached the engine. Those three
-// diverging means input is being lost somewhere in between.
+// The third is the one people misread as unevenness — past roughly 100ms
+// the auditory feedback loop stops working, so the tapping itself
+// degrades and it looks like an app bug. But it cannot be totalled up
+// honestly here: `lookahead` is measured and trustworthy, `outputLatency`
+// is whatever the browser chooses to state (an iPhone reported the same
+// 163ms over AirPods and over its own speaker, which cannot both be
+// true), and the delay between a finger and the digitiser noticing isn't
+// visible from JS at all. Calibrate measures the real round trip end to
+// end, so that is what these numbers should be sanity-checked against
+// rather than summed.
+//
+// "touches vs events vs judged vs chatter-rejected" catches taps going
+// missing: touches is what the digitiser reported, events is how many
+// dispatches carried them, judged is how many reached the engine, and
+// chatter-rejected is how many this app threw away on purpose. Those
+// diverging means input is being lost, and the four together say where.
 export default function TapTimingDebug({ engine }) {
   const touch = useEventRecorder('touchstart')
   const pointer = useEventRecorder('pointerdown', (e) => e.pointerType !== 'touch')
@@ -98,16 +108,28 @@ export default function TapTimingDebug({ engine }) {
         soundGaps.push(Math.round((taps[i].soundTimeMs - taps[i - 1].soundTimeMs) * 10) / 10)
       }
       const t = touch.current
+      const chatter = chatterStats()
       let out = c
-        ? `AUDIO — rate ${c.sampleRate}Hz  block ${fmt(c.blockMs)}ms  baseLatency ${fmt(c.baseLatencyMs)}ms  outputLatency ${fmt(
-            c.outputLatencyMs,
-          )}ms\n` +
-          `        TAP -> EAR ${fmt(c.tapToEarMs)}ms  (lookahead ${fmt(c.lookaheadMs)}ms + output ${fmt(c.outputLatencyMs)}ms)\n` +
+        ? `AUDIO — rate ${c.sampleRate}Hz  block ${fmt(c.blockMs)}ms  baseLatency ${fmt(c.baseLatencyMs)}ms\n` +
+          `        lookahead ${fmt(c.lookaheadMs)}ms (what this app adds, measured)\n` +
+          // Deliberately not folded into a single "tap -> ear" figure any
+          // more. On an iPhone this read an identical 163ms over AirPods
+          // and over the built-in speaker, which cannot both be true —
+          // real output latency differs by 100ms+ between those routes. So
+          // it is a number the browser states, not one it measures, and
+          // presenting a total built on it invented a precision this panel
+          // does not have. Calibrate is the honest measurement: the offset
+          // it lands on is the whole round trip, ears and fingers included.
+          `        outputLatency ${fmt(c.outputLatencyMs)}ms (browser-reported, NOT verified — trust Calibrate over this)\n` +
           `        input delay p90 ${fmt(c.handlerDelayMs)}ms / worst ${fmt(c.worstHandlerDelayMs)}ms  pushed-late ${c.clampCount}/${
             c.scheduleCount
           }\n`
         : 'AUDIO — (tap once to start the audio engine)\n'
-      out += `        touches ${t.touches} / events ${t.events} / judged ${engine.judgedTapCountRef.current}\n\n`
+      out += `        touches ${t.touches} / events ${t.events} / judged ${engine.judgedTapCountRef.current} / chatter-rejected ${chatter.rejectedCount}\n`
+      if (chatter.recent.length) {
+        out += `        rejected: ${chatter.recent.map((r) => `${r.key} ev+${r.eventGap} arr+${r.arrivalGap}`).join(' | ')}\n`
+      }
+      out += '\n'
       out += line('SOUND spacing (scheduled hit-sound gaps)', soundGaps)
       out += line('TAP spacing — touchstart', t.intervals)
       out += line('TAP spacing — mouse/pen pointerdown', pointer.current.intervals)
