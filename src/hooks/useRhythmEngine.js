@@ -404,12 +404,23 @@ export function useRhythmEngine() {
       // spaced on playback. Anchoring every playHitSound call to this one
       // timestamp instead keeps output spacing matched to actual input
       // spacing.
-      // Clamped to >= 0: when the AudioContext is lazily created by this
-      // very tap (the first tap of a session, before anything's played
-      // yet), the clock anchor is stamped a hair after this event's own
-      // timeStamp — mapping that through perfToAudioTime can come out
-      // very slightly negative, which AudioParam scheduling throws on.
-      const rawNow = Math.max(0, eventTimeStamp != null ? perfToAudioTime(eventTimeStamp) : ctx.currentTime)
+      // Clamped to [0, ctx.currentTime]: the audio clock FREEZES while the
+      // context is suspended (which mobile browsers do aggressively once
+      // there's no continuous playback — e.g. between idle pad-test taps),
+      // but performance.now() keeps advancing regardless. The perf->audio
+      // mapping below is only valid as long as both clocks were actually
+      // running the whole time since the anchor was set; every ms the
+      // context spent suspended shows up as the mapping overestimating how
+      // much audio-time has really passed. Left unclamped, that overshoot
+      // schedules this tap's sound however far in the future the context
+      // was suspended for — a multi-second "delay" instead of instant. A
+      // confirmation sound should never legitimately play later than right
+      // now, so capping at ctx.currentTime is always safe. (The >= 0 side
+      // separately guards the first tap of a session: when this very tap is
+      // what lazily creates the context, the anchor gets stamped a hair
+      // after this event's own timeStamp, which can map to just barely
+      // negative — invalid for AudioParam scheduling.)
+      const rawNow = Math.max(0, Math.min(ctx.currentTime, eventTimeStamp != null ? perfToAudioTime(eventTimeStamp) : ctx.currentTime))
       if (!s.isPlaying || scheduledEventsRef.current.length === 0) {
         // Nothing playing to judge against — still confirm the pad/key works
         // with an audible hit sound (same sample as a Perfect hit), just with
