@@ -9,11 +9,18 @@ import JudgementFooter from './components/JudgementFooter.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import CalibrationModal from './components/CalibrationModal.jsx'
 import TapTempoModal from './components/TapTempoModal.jsx'
+import TapTimingDebug from './components/TapTimingDebug.jsx'
 import { preventZoomGestures } from './utils/preventZoomGestures.js'
 
 export default function App() {
   const engine = useRhythmEngine()
   const display = usePatternDisplay(engine.state)
+
+  // Temporary diagnostic overlay for tracking down uneven touch playback —
+  // visit the app with ?debugTap=1 in the URL to show it. Not linked from
+  // anywhere in the normal UI.
+  const showTapDebug =
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugTap')
 
   // Belt-and-suspenders against iOS Safari zoom: the viewport meta and
   // touch-action CSS are the first line of defense, but Safari ignores
@@ -114,6 +121,8 @@ export default function App() {
       {engine.state.tapTempoOpen && (
         <TapTempoModal engine={engine} isDesktop={isDesktop} onClose={engine.closeTapTempo} />
       )}
+
+      {showTapDebug && <TapTimingDebug />}
     </div>
   )
 }
