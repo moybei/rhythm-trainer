@@ -52,15 +52,21 @@ export default function TapArea({ engine, display, isDesktop, modePickerOpen, on
   const isPads4 = state.tapMode === 'pads4'
   const tapAreaRef = useRef(null)
 
-  // Judged taps are wired up via a raw native pointerdown listener — one
-  // delegated listener for the whole tap area, not a React onPointerDown
-  // on each pad — mirroring exactly how keyboard input already works (a
-  // plain window 'keydown' listener, entirely outside React's synthetic
-  // event system). That turned out to matter: keyboard taps (already raw)
-  // felt instant and even; touch taps (going through React's synthetic
-  // dispatch on every pad) did not, even for physically even input. This
-  // removes React's event-handling overhead from the touch path the same
-  // way it was already absent from the keyboard path.
+  // Judged taps are wired up via raw native listeners — one delegated
+  // listener for the whole tap area, not a React onPointerDown on each pad
+  // — mirroring exactly how keyboard input already works (a plain window
+  // 'keydown' listener, entirely outside React's synthetic event system).
+  // That turned out to matter: keyboard taps (already raw) felt instant
+  // and even; touch taps (going through React's synthetic dispatch on
+  // every pad) did not, even for physically even input.
+  //
+  // Touch specifically uses 'touchstart', not 'pointerdown': Safari only
+  // gained full Pointer Events support in iOS 13 (2019), well after touch
+  // events (WebKit's original, native-first touch API since the first
+  // iPhone) — Pointer Events there are effectively a translation layer on
+  // top of the same underlying touch pipeline, adding a dispatch step
+  // 'touchstart' skips. 'pointerdown' is kept for mouse/pen (touch
+  // explicitly ignored there, so a real touch is never handled twice).
   const registerJudgedTapRef = useRef(engine.registerJudgedTap)
   useEffect(() => {
     registerJudgedTapRef.current = engine.registerJudgedTap
@@ -72,19 +78,42 @@ export default function TapArea({ engine, display, isDesktop, modePickerOpen, on
   useEffect(() => {
     const el = tapAreaRef.current
     if (!el) return
+
+    const acceptTap = (padId, timeStamp) => {
+      const last = lastAcceptedRef.current[padId]
+      if (last != null && timeStamp - last < CHATTER_DEBOUNCE_MS) return // touchscreen chatter, not a second tap
+      lastAcceptedRef.current[padId] = timeStamp
+      registerJudgedTapRef.current(padId, timeStamp)
+    }
+
+    const onTouchStart = (e) => {
+      let handled = false
+      // changedTouches (not just the first touch) so two fingers landing on
+      // two different pads in the same event both register.
+      for (const touch of e.changedTouches) {
+        const target = touch.target && touch.target.closest && touch.target.closest('[data-tap-pad]')
+        if (!target) continue
+        handled = true
+        acceptTap(target.dataset.tapPad, e.timeStamp)
+      }
+      if (handled) e.preventDefault() // stop the delayed compatibility mouse/click events from also firing this
+    }
+
     const onPointerDown = (e) => {
+      if (e.pointerType === 'touch') return // touch is handled by 'touchstart' above instead
       if (e.pointerType === 'mouse' && e.button !== 0) return // ignore right/middle click
       const target = e.target.closest('[data-tap-pad]')
       if (!target) return
-      e.preventDefault() // stop the delayed compatibility mouse/click events from also firing this
-      const padId = target.dataset.tapPad
-      const last = lastAcceptedRef.current[padId]
-      if (last != null && e.timeStamp - last < CHATTER_DEBOUNCE_MS) return // touchscreen chatter, not a second tap
-      lastAcceptedRef.current[padId] = e.timeStamp
-      registerJudgedTapRef.current(padId, e.timeStamp)
+      e.preventDefault()
+      acceptTap(target.dataset.tapPad, e.timeStamp)
     }
+
+    el.addEventListener('touchstart', onTouchStart, { passive: false })
     el.addEventListener('pointerdown', onPointerDown, { passive: false })
-    return () => el.removeEventListener('pointerdown', onPointerDown)
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('pointerdown', onPointerDown)
+    }
   }, [])
 
   return (
