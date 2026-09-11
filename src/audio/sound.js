@@ -102,6 +102,22 @@ export function preloadSamples(ctx) {
   Object.keys(SAMPLE_FILES).forEach((key) => loadSample(ctx, key))
 }
 
+// These samples run 350-875ms — long enough that fast tapping stacks
+// several full, overlapping copies of the same sample at once. Desktop has
+// DSP headroom to spare for that; phones commonly don't, and piling up
+// unbounded simultaneous voices through one shared compressor is exactly
+// the kind of real-time load that produces audible clipping/glitching on
+// mobile hardware (never showing up on desktop, same code) — and can burn
+// enough CPU on the audio thread to start contending with input handling
+// too. Cap how many of these can ring out at once; past the cap, stop the
+// OLDEST voice before starting the new one. A single tap or a normal roll
+// (a few overlapping hits) is never touched — full, untruncated sample,
+// exactly as before. Only pathological pile-ups get capped, and those
+// extra copies are already inaudibly masked under the rest of the stack
+// anyway, so nothing perceptible is lost in the common case.
+const MAX_CONCURRENT_SAMPLE_VOICES = 4
+let activeSampleVoices = []
+
 function playBuffer(ctx, buffer, time, gain) {
   const source = ctx.createBufferSource()
   const g = ctx.createGain()
@@ -113,12 +129,24 @@ function playBuffer(ctx, buffer, time, gain) {
   // real sampler/DAW; the limiter (not truncation) is what keeps that from
   // ever turning into harsh clipping.
   g.connect(getMasterBus(ctx))
+
+  activeSampleVoices.push(source)
+  if (activeSampleVoices.length > MAX_CONCURRENT_SAMPLE_VOICES) {
+    const oldest = activeSampleVoices.shift()
+    try {
+      oldest.stop()
+    } catch {
+      // Already stopped/ended on its own between the push and here — fine.
+    }
+  }
+
   // Explicitly release the nodes once playback ends instead of leaving it
   // to garbage collection — cheap insurance against ever accumulating
   // enough dead nodes in a long session to matter on a low-power device.
   source.onended = () => {
     source.disconnect()
     g.disconnect()
+    activeSampleVoices = activeSampleVoices.filter((s) => s !== source)
   }
   source.start(time)
 }
