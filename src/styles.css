@@ -523,8 +523,10 @@ input:focus {
   /* Tap-judging surfaces respond on pointerdown (see TapArea.jsx) — these
      stop the browser from adding its own touch latency/UI on top: no
      gesture-disambiguation delay, no long-press callout or text selection,
-     no gray flash on tap. */
-  touch-action: manipulation;
+     no gray flash on tap. `none` (not `manipulation`) matters especially on
+     a tablet: two fingers landing on two different pads at once must never
+     get read as a pinch-zoom gesture instead of two separate taps. */
+  touch-action: none;
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
@@ -569,7 +571,7 @@ input:focus {
   gap: 6px;
   cursor: pointer;
   box-shadow: none;
-  touch-action: manipulation;
+  touch-action: none; /* see .lr-zone — two-finger multi-touch must never read as pinch-zoom */
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
