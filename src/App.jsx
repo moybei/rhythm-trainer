@@ -122,7 +122,7 @@ export default function App() {
         <TapTempoModal engine={engine} isDesktop={isDesktop} onClose={engine.closeTapTempo} />
       )}
 
-      {showTapDebug && <TapTimingDebug />}
+      {showTapDebug && <TapTimingDebug engine={engine} />}
     </div>
   )
 }

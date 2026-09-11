@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { currentPattern, flattenPattern, DEFAULT_KEYBINDS, handForPad, padsForHand } from '../data/patterns.js'
 import { playClick, playGuide, playHitSound, playLeadInClick, preloadSamples } from '../audio/sound.js'
+import { createAudioClock } from '../audio/clock.js'
 
 // A note stays judgeable for this long on either side of its scheduled
 // time — the same window as the Good tier's outer edge. Once it closes
@@ -154,23 +155,28 @@ export function useRhythmEngine() {
   const tapFeedbackTimerRef = useRef(null)
   const leadinFlashSeqRef = useRef(0)
 
+  // Last few judged taps, for the ?debugTap=1 overlay: the event's own
+  // timestamp, how late our handler ran behind it, and the absolute audio
+  // time its sound was scheduled at. Comparing the gaps between the first
+  // and the last column is what separates an input-timing problem from an
+  // output-scheduling one — the two look identical from the player's side.
+  const tapDebugRef = useRef([])
+
   const calSchedulerTimerRef = useRef(null)
   const calNextTimeRef = useRef(0)
   const calBeatIndexRef = useRef(0)
   const calScheduledBeatTimesRef = useRef([])
   const calDeltasRef = useRef([])
 
-  // Anchors performance.now() to AudioContext.currentTime once, so a
-  // keydown's `event.timeStamp` (same clock as performance.now()) can be
-  // converted into audio-clock time. That lets judgement use the moment the
-  // browser actually received the key event instead of the moment our JS
-  // callback happened to run — removing event-queue/task-scheduling jitter
-  // from the input side of timing.
-  const clockAnchorRef = useRef({ perfNow: 0, audioTime: 0 })
-  const perfToAudioTime = useCallback((perfTimeStamp) => {
-    const { perfNow, audioTime } = clockAnchorRef.current
-    return audioTime + (perfTimeStamp - perfNow) / 1000
-  }, [])
+  // Continuously-filtered performance.now() <-> AudioContext.currentTime
+  // bridge, so an event's `timeStamp` (same clock as performance.now()) can
+  // be converted into audio-clock time. That lets judgement use the moment
+  // the browser actually received the input event instead of the moment our
+  // JS callback happened to run, and lets a tap's own confirmation sound be
+  // scheduled off that same instant. See audio/clock.js for why a single
+  // {performance.now(), ctx.currentTime} pair is not good enough for either
+  // job on a device with a large audio buffer.
+  const clockRef = useRef(null)
 
   const ensureAudioCtx = useCallback(() => {
     if (!audioCtxRef.current) {
@@ -180,10 +186,7 @@ export function useRhythmEngine() {
       // the same trade-off a real rhythm game's audio engine makes.
       audioCtxRef.current = new AC({ latencyHint: 'interactive' })
       preloadSamples(audioCtxRef.current)
-      clockAnchorRef.current = {
-        perfNow: performance.now(),
-        audioTime: audioCtxRef.current.currentTime,
-      }
+      clockRef.current = createAudioClock(audioCtxRef.current)
       // Mobile browsers (iOS especially) can suspend the context the moment
       // the tab/app is backgrounded even briefly — a screen lock or app
       // switch mid-session. Resume the instant it's visible again instead
@@ -191,12 +194,26 @@ export function useRhythmEngine() {
       // right when the player is trying to play.
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
-          audioCtxRef.current.resume()
+          audioCtxRef.current.resume().then(() => clockRef.current && clockRef.current.reset())
         }
       })
     }
-    if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
+    if (audioCtxRef.current.state === 'suspended') {
+      // currentTime stands still while suspended but performance.now()
+      // doesn't, so everything the clock learned before the gap is now
+      // wrong — throw it away once the context is actually running again.
+      audioCtxRef.current.resume().then(() => clockRef.current && clockRef.current.reset())
+    }
     return audioCtxRef.current
+  }, [])
+
+  // Audio-clock time of an input event, from its own timestamp. Falls back
+  // to "right now" (still the filtered estimate, never the quantised
+  // ctx.currentTime) when an event didn't carry a usable one.
+  const perfToAudioTime = useCallback((perfTimeStamp) => {
+    const clock = clockRef.current
+    if (!clock) return audioCtxRef.current ? audioCtxRef.current.currentTime : 0
+    return perfTimeStamp != null ? clock.perfToAudio(perfTimeStamp) : clock.now()
   }, [])
 
   // Red "missed" note coloring accumulates over one loop of the pattern and
@@ -396,22 +413,31 @@ export function useRhythmEngine() {
     (padId, eventTimeStamp) => {
       const s = stateRef.current
       const ctx = ensureAudioCtx()
-      // The confirmation sound always plays at the live audio clock, read
-      // fresh right here — never a reconstructed/mapped timestamp. That's
-      // the only value with zero drift risk (it IS "now", by definition,
-      // no anchor to go stale on), so it's what actually gives minimal,
-      // consistent input-to-output latency — the same principle any real
-      // rhythm game's audio engine follows: fire the sound immediately,
-      // judge the timing separately.
-      const soundTime = ctx.currentTime
+      // The confirmation sound is scheduled a fixed interval after THIS
+      // TAP — derived from the tap's own event timestamp, not from a fresh
+      // ctx.currentTime read. Reading the clock here felt like the most
+      // direct, lowest-latency thing to do, and on desktop it is; but
+      // ctx.currentTime only advances one audio block at a time, so on a
+      // device with a big audio buffer it reports the last block boundary
+      // rather than "now", rounding every tap down by a different amount.
+      // Evenly spaced taps then come out snapped to the block grid —
+      // audibly uneven, which is precisely the iPhone symptom. Anchoring
+      // to the tap instead makes the tap-to-sound delay a constant, which
+      // is what "even" actually requires. See audio/clock.js.
+      const soundTime = clockRef.current.reactionTime(eventTimeStamp)
+      tapDebugRef.current.push({
+        padId,
+        eventMs: eventTimeStamp,
+        handlerAgeMs: eventTimeStamp != null ? performance.now() - eventTimeStamp : null,
+        soundTimeMs: soundTime * 1000,
+      })
+      if (tapDebugRef.current.length > 32) tapDebugRef.current.shift()
 
-      // Judgement (tier/FAST-LATE) is the one thing that DOES benefit from
-      // the input event's own timestamp mapped into audio-clock time,
-      // since it's compared against precisely scheduled note times — using
+      // Judgement (tier/FAST-LATE) uses the same mapped timestamp, since
+      // it's compared against precisely scheduled note times — using
       // "whenever this callback happened to run" instead would register as
-      // extra, inconsistent input jitter in the score, even though it
-      // doesn't affect when the sound itself plays.
-      const rawNow = eventTimeStamp != null ? perfToAudioTime(eventTimeStamp) : ctx.currentTime
+      // extra, inconsistent input jitter in the score.
+      const rawNow = perfToAudioTime(eventTimeStamp)
 
       if (!s.isPlaying || scheduledEventsRef.current.length === 0) {
         // Nothing playing to judge against — still confirm the pad/key works
@@ -603,7 +629,11 @@ export function useRhythmEngine() {
   const updateHighlight = useCallback(() => {
     if (!stateRef.current.isPlaying || !audioCtxRef.current) return
     const ctx = audioCtxRef.current
-    const now = ctx.currentTime
+    // The filtered estimate, not ctx.currentTime: the auto-miss sweep
+    // compares against the same note times judged taps do, so both sides
+    // have to read the clock the same way or a note can be swept as a Miss
+    // while a tap arriving at that very instant still measures as in-window.
+    const now = clockRef.current.now()
     const s = stateRef.current
 
     // Auto-miss sweep: any note whose window has fully closed without a
@@ -646,7 +676,10 @@ export function useRhythmEngine() {
     }
 
     if (missCount > 0) {
-      if (s.hitSoundEnabled) playHitSound(ctx, now, 'miss', s.missSoundVolume)
+      // reactionTime(null) rather than `now`: playHitSound no longer adds
+      // any lookahead of its own, and a sound asked for at the current
+      // instant is already inside the block being rendered.
+      if (s.hitSoundEnabled) playHitSound(ctx, clockRef.current.reactionTime(null), 'miss', s.missSoundVolume)
       if (lastMissedHand) showTapFeedback(padsForHand(lastMissedHand), 'miss', null)
     }
 
@@ -662,13 +695,10 @@ export function useRhythmEngine() {
 
   const startPlayback = useCallback(() => {
     const ctx = ensureAudioCtx()
-    // Re-anchor the perf-clock/audio-clock mapping every time playback
-    // starts, not just once at AudioContext creation — the two clocks can
-    // be driven by separate hardware oscillators (CPU timer vs. audio
-    // device clock) that slowly drift apart the longer they both run. This
-    // caps how much of that drift ever reaches judgement to whatever
-    // accumulates within one play session, instead of a whole page lifetime.
-    clockAnchorRef.current = { perfNow: performance.now(), audioTime: ctx.currentTime }
+    // No re-anchoring needed here any more: the clock bridge samples both
+    // clocks continuously over a sliding window, so the slow drift between
+    // the CPU timer and the audio device's own oscillator gets tracked as
+    // it happens instead of being reset once per play session.
     const s = stateRef.current
     currentBpmRef.current = s.bpm
     hitCounterRef.current = 0
@@ -751,9 +781,6 @@ export function useRhythmEngine() {
 
   const startCalibrationSequence = useCallback(() => {
     const ctx = ensureAudioCtx()
-    // Same reasoning as startPlayback: keep the measured offset from ever
-    // absorbing perf-clock/audio-clock drift accumulated before this run.
-    clockAnchorRef.current = { perfNow: performance.now(), audioTime: ctx.currentTime }
     calBeatIndexRef.current = 0
     calScheduledBeatTimesRef.current = []
     calDeltasRef.current = []
@@ -785,7 +812,7 @@ export function useRhythmEngine() {
     // this measures matches what future taps will actually be judged
     // against (otherwise calibration would bake in a slightly different
     // jitter profile than real play).
-    const now = eventTimeStamp != null ? perfToAudioTime(eventTimeStamp) : audioCtxRef.current.currentTime
+    const now = perfToAudioTime(eventTimeStamp)
     let bestDelta = Infinity
     let nearestTime = null
     for (const t of calScheduledBeatTimesRef.current) {
@@ -867,9 +894,13 @@ export function useRhythmEngine() {
     }
   }, [handleKeyDown])
 
+  const getClockStats = useCallback(() => (clockRef.current ? clockRef.current.stats() : null), [])
+
   return {
     state,
     scheduledEventsRef,
+    tapDebugRef,
+    getClockStats,
     handleBpmInput,
     handleLeadInInput,
     handleRampAmountInput,
