@@ -6,7 +6,14 @@ export default function CalibrationModal({ engine, display, isDesktop, onClose }
         <div className="calibration-blurb">
           Listen to 8 clicks at 140 BPM, then tap along with the next 8{isDesktop ? ' (press X, or tap the button)' : ''}.
         </div>
-        <button type="button" className="calibration-tap" onClick={engine.registerCalibrationTap}>
+        <button
+          type="button"
+          className="calibration-tap"
+          onPointerDown={(e) => {
+            e.preventDefault()
+            engine.registerCalibrationTap(e.timeStamp)
+          }}
+        >
           TAP{isDesktop ? ' (X)' : ''}
         </button>
         <div className="calibration-status">{display.calibrationStatusLabel}</div>

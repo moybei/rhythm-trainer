@@ -5,6 +5,21 @@ const PAD_POSITIONS = {
   R2: { left: '80%', top: '66%' },
 }
 
+// Judged taps fire on pointerdown, not click. A click only fires after the
+// finger lifts (touchend) plus the browser's own tap-recognition delay —
+// on a phone that alone can add 100-300ms of pure latency before the game
+// even sees the tap, on top of whatever timestamp it's judged against. Using
+// the pointerdown event's own `timeStamp` (mapped to audio-clock time, same
+// as the keyboard path) means the game reacts the instant a finger lands,
+// and judges against the moment contact actually happened rather than
+// whenever this callback happened to get scheduled — a source of the
+// jittery, seemingly-random extra delay touch input had before this.
+function handleTapPointerDown(e, fire) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return // ignore right/middle click
+  e.preventDefault() // stop the delayed compatibility mouse/click events from also firing this
+  fire()
+}
+
 // Badge shown above a pad's letter after a judged tap (or an auto-missed
 // note, for `pad`s representing that note's hand). Keyed on `feedback.seq`
 // so React remounts the span (not just updates its text) on every new tap,
@@ -81,7 +96,7 @@ export default function TapArea({ engine, display, isDesktop, modePickerOpen, on
         <div className="lr-zones">
           <div
             className={`lr-zone${display.leftIsActive ? ' is-active' : ''}`}
-            onClick={() => engine.registerJudgedTap('L')}
+            onPointerDown={(e) => handleTapPointerDown(e, () => engine.registerJudgedTap('L', e.timeStamp))}
           >
             <TapFeedback feedback={state.tapFeedback} pad="L" />
             <span className="lr-zone__letter" style={{ color: 'var(--l)' }}>
@@ -91,7 +106,7 @@ export default function TapArea({ engine, display, isDesktop, modePickerOpen, on
           </div>
           <div
             className={`lr-zone${display.rightIsActive ? ' is-active' : ''}`}
-            onClick={() => engine.registerJudgedTap('R')}
+            onPointerDown={(e) => handleTapPointerDown(e, () => engine.registerJudgedTap('R', e.timeStamp))}
           >
             <TapFeedback feedback={state.tapFeedback} pad="R" />
             <span className="lr-zone__letter" style={{ color: 'var(--r)' }}>
@@ -114,7 +129,7 @@ export default function TapArea({ engine, display, isDesktop, modePickerOpen, on
               key={pad.id}
               className={`pad${pad.active ? ' is-active' : ''}`}
               style={PAD_POSITIONS[pad.id]}
-              onClick={() => engine.registerJudgedTap(pad.id)}
+              onPointerDown={(e) => handleTapPointerDown(e, () => engine.registerJudgedTap(pad.id, e.timeStamp))}
             >
               <TapFeedback feedback={state.tapFeedback} pad={pad.id} />
               <span className="pad__letter" style={{ color: pad.color }}>

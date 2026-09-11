@@ -279,8 +279,13 @@ export function useRhythmEngine() {
     patch({ tapTempoOpen: false })
   }, [patch])
 
-  const registerTapTempoTap = useCallback(() => {
-    const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  const registerTapTempoTap = useCallback((eventTimeStamp) => {
+    // Prefer the input event's own timestamp over "whenever this callback
+    // happened to run" — same reasoning as registerJudgedTap: on a loaded
+    // main thread (or over the touch pipeline's own latency) those can
+    // drift apart by enough to jitter the measured interval between taps.
+    const now =
+      eventTimeStamp != null ? eventTimeStamp : typeof performance !== 'undefined' ? performance.now() : Date.now()
     const taps = tapTempoTimestampsRef.current
     const last = taps.length ? taps[taps.length - 1] : null
     // A long gap since the last tap means the player paused and is starting
@@ -809,7 +814,7 @@ export function useRhythmEngine() {
       // Same idea for the tap-tempo UI: X only means "tap" while it's open,
       // so it's free to also be bound as a regular L/R/pad key otherwise.
       if (s.tapTempoOpen) {
-        if (key === 'X') registerTapTempoTap()
+        if (key === 'X') registerTapTempoTap(e.timeStamp)
         return
       }
 

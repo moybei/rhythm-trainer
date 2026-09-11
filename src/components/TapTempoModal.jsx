@@ -14,7 +14,14 @@ export default function TapTempoModal({ engine, isDesktop, onClose }) {
           Tap along to your desired tempo{isDesktop ? ' (press X, or tap the button)' : ''} — BPM updates from the
           average of your last 8 taps.
         </div>
-        <button type="button" className="calibration-tap" onClick={engine.registerTapTempoTap}>
+        <button
+          type="button"
+          className="calibration-tap"
+          onPointerDown={(e) => {
+            e.preventDefault()
+            engine.registerTapTempoTap(e.timeStamp)
+          }}
+        >
           TAP{isDesktop ? ' (X)' : ''}
         </button>
         <div className="calibration-status">{status}</div>

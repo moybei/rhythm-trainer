@@ -520,6 +520,14 @@ input:focus {
   gap: 12px;
   cursor: pointer;
   box-shadow: none;
+  /* Tap-judging surfaces respond on pointerdown (see TapArea.jsx) — these
+     stop the browser from adding its own touch latency/UI on top: no
+     gesture-disambiguation delay, no long-press callout or text selection,
+     no gray flash on tap. */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 .lr-zone.is-active {
   box-shadow: var(--active-ring);
@@ -561,6 +569,10 @@ input:focus {
   gap: 6px;
   cursor: pointer;
   box-shadow: none;
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 .pad.is-active {
   box-shadow: var(--active-ring);
@@ -789,6 +801,10 @@ input:focus {
   color: var(--bg);
   font-size: 20px;
   font-weight: 700;
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 .calibration-status {
   font-size: 13px;
