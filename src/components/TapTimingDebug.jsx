@@ -71,11 +71,11 @@ export default function TapTimingDebug() {
     >
       TOUCH/MOUSE intervals ms (last 30) — min {t.min} / avg {t.avg} / max {t.max}
       {'\n'}
-      {touchIntervals.join(', ')}
+      {touchIntervals.join(', ') || '(no taps yet)'}
       {'\n\n'}
       KEYBOARD intervals ms (last 30) — min {k.min} / avg {k.avg} / max {k.max}
       {'\n'}
-      {keyIntervals.join(', ')}
+      {keyIntervals.join(', ') || '(no presses yet — press-and-release each key with a finger; holding one down for the OS\'s own auto-repeat is ignored on purpose, since that\'s the computer\'s timer tapping, not yours)'}
     </div>
   )
 }
