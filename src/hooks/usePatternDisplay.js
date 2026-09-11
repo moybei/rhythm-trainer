@@ -72,5 +72,30 @@ export function usePatternDisplay(state) {
       leadinDots,
       calibrationStatusLabel,
     }
-  }, [state])
+    // Deliberately NOT `[state]` — that's a new object reference on every
+    // patch() call, including ones this computation doesn't even use
+    // (tapFeedback, judgementCounts, any volume/setting change). Since a
+    // judged tap patches tapFeedback/judgementCounts on every single hit,
+    // depending on the whole state object made this whole 64-note pattern
+    // rebuild (and the DOM diff that follows it) re-run on every tap, not
+    // just on an actual note/pattern change — exactly the kind of main-
+    // thread work that piles up and starts dropping input under a fast,
+    // sustained tapping burst (16th notes especially). Listing only the
+    // fields this computation actually reads means tapping fast no longer
+    // costs anything here at all; it only recomputes when the pattern
+    // itself actually has something new to show.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    state.selectedPatternId,
+    state.mirrored,
+    state.missedIndices,
+    state.activeIndex,
+    state.showTargetPad,
+    state.leadInTotal,
+    state.leadinCount,
+    state.calibrationResultMs,
+    state.calibrationRunning,
+    state.calibrationInTapPhase,
+    state.calibrationTapsCollected,
+  ])
 }
