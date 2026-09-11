@@ -175,7 +175,10 @@ export function useRhythmEngine() {
   const ensureAudioCtx = useCallback(() => {
     if (!audioCtxRef.current) {
       const AC = window.AudioContext || window.webkitAudioContext
-      audioCtxRef.current = new AC()
+      // 'interactive' asks the browser for the lowest latency it can offer
+      // (smaller internal buffers) rather than the power-saving default —
+      // the same trade-off a real rhythm game's audio engine makes.
+      audioCtxRef.current = new AC({ latencyHint: 'interactive' })
       preloadSamples(audioCtxRef.current)
       clockAnchorRef.current = {
         perfNow: performance.now(),
@@ -393,40 +396,29 @@ export function useRhythmEngine() {
     (padId, eventTimeStamp) => {
       const s = stateRef.current
       const ctx = ensureAudioCtx()
-      // Prefer the browser's own timestamp for when it received the input
-      // event (mapped into audio-clock time) over "whenever this callback
-      // happened to run" — the latter can lag the real tap by a task or a
-      // frame under load, by a *different* amount each time. That's used
-      // for judging below, but it also matters for the confirmation sound
-      // itself: scheduling playback at a freshly-read ctx.currentTime here
-      // ties its start time to that same variable JS-execution delay, which
-      // is what can make a run of physically-even taps sound unevenly
-      // spaced on playback. Anchoring every playHitSound call to this one
-      // timestamp instead keeps output spacing matched to actual input
-      // spacing.
-      // Clamped to [0, ctx.currentTime]: the audio clock FREEZES while the
-      // context is suspended (which mobile browsers do aggressively once
-      // there's no continuous playback — e.g. between idle pad-test taps),
-      // but performance.now() keeps advancing regardless. The perf->audio
-      // mapping below is only valid as long as both clocks were actually
-      // running the whole time since the anchor was set; every ms the
-      // context spent suspended shows up as the mapping overestimating how
-      // much audio-time has really passed. Left unclamped, that overshoot
-      // schedules this tap's sound however far in the future the context
-      // was suspended for — a multi-second "delay" instead of instant. A
-      // confirmation sound should never legitimately play later than right
-      // now, so capping at ctx.currentTime is always safe. (The >= 0 side
-      // separately guards the first tap of a session: when this very tap is
-      // what lazily creates the context, the anchor gets stamped a hair
-      // after this event's own timeStamp, which can map to just barely
-      // negative — invalid for AudioParam scheduling.)
-      const rawNow = Math.max(0, Math.min(ctx.currentTime, eventTimeStamp != null ? perfToAudioTime(eventTimeStamp) : ctx.currentTime))
+      // The confirmation sound always plays at the live audio clock, read
+      // fresh right here — never a reconstructed/mapped timestamp. That's
+      // the only value with zero drift risk (it IS "now", by definition,
+      // no anchor to go stale on), so it's what actually gives minimal,
+      // consistent input-to-output latency — the same principle any real
+      // rhythm game's audio engine follows: fire the sound immediately,
+      // judge the timing separately.
+      const soundTime = ctx.currentTime
+
+      // Judgement (tier/FAST-LATE) is the one thing that DOES benefit from
+      // the input event's own timestamp mapped into audio-clock time,
+      // since it's compared against precisely scheduled note times — using
+      // "whenever this callback happened to run" instead would register as
+      // extra, inconsistent input jitter in the score, even though it
+      // doesn't affect when the sound itself plays.
+      const rawNow = eventTimeStamp != null ? perfToAudioTime(eventTimeStamp) : ctx.currentTime
+
       if (!s.isPlaying || scheduledEventsRef.current.length === 0) {
         // Nothing playing to judge against — still confirm the pad/key works
         // with an audible hit sound (same sample as a Perfect hit), just with
         // no tier, no count, and no badge (nothing to be early or late
         // relative to).
-        if (s.hitSoundEnabled) playHitSound(ctx, rawNow, 'idle', s.hitSoundVolume)
+        if (s.hitSoundEnabled) playHitSound(ctx, soundTime, 'idle', s.hitSoundVolume)
         return
       }
       const now = rawNow - s.offsetMs / 1000
@@ -444,7 +436,7 @@ export function useRhythmEngine() {
         // No open same-hand note within reach — a stray tap (including
         // tapping a hand nothing is currently due for). Still responsive,
         // but nothing to judge (matches the "not playing" fallback above).
-        if (s.hitSoundEnabled) playHitSound(ctx, rawNow, 'idle', s.hitSoundVolume)
+        if (s.hitSoundEnabled) playHitSound(ctx, soundTime, 'idle', s.hitSoundVolume)
         return
       }
 
@@ -457,7 +449,7 @@ export function useRhythmEngine() {
       else tier = 'good' // candidates are pre-filtered to <= GOOD_WINDOW_MS above
 
       nearest.judged = true
-      if (s.hitSoundEnabled) playHitSound(ctx, rawNow, tier, s.hitSoundVolume)
+      if (s.hitSoundEnabled) playHitSound(ctx, soundTime, tier, s.hitSoundVolume)
 
       // Critical Perfect is treated as "on time" — no badge at all.
       if (padId && tier !== 'critical') {
