@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { KEYBIND_META } from '../data/patterns.js'
 import NumberField from './NumberField.jsx'
+import { hardReload } from '../utils/hardReload.js'
 
 function VolumeRow({ label, valuePercent, onChange }) {
   return (
@@ -21,6 +23,7 @@ function VolumeRow({ label, valuePercent, onChange }) {
 
 export default function SettingsModal({ engine, isDesktop, onClose }) {
   const { state } = engine
+  const [reloading, setReloading] = useState(false)
 
   return (
     <div className="modal-backdrop modal-backdrop--settings" onClick={onClose}>
@@ -97,6 +100,33 @@ export default function SettingsModal({ engine, isDesktop, onClose }) {
             })}
           </>
         )}
+
+        <div className="modal-heading" style={{ margin: '14px 0 4px' }}>
+          App
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+          }}
+        >
+          <span className="field-label" style={{ maxWidth: 200 }}>
+            Stuck on an old version? Clear the cache and reload.
+          </span>
+          <button
+            type="button"
+            className="pill-button"
+            disabled={reloading}
+            onClick={() => {
+              setReloading(true)
+              hardReload()
+            }}
+          >
+            {reloading ? 'Reloading…' : 'Hard Reload'}
+          </button>
+        </div>
 
         <button
           type="button"
