@@ -1,44 +1,46 @@
 import { useEffect, useRef, useState } from 'react'
 
-// Tracks the raw gap between consecutive events of one type, at the
-// document level in the capture phase — before TapArea's own listener,
-// before React, before anything else in this app's code runs. `filter`
-// (optional) can reject events that shouldn't count (e.g. keyboard
-// auto-repeat from a held key).
+// Records every event of one type at the document level in the capture
+// phase — before TapArea's own listener, before React, before anything
+// else in this app's code runs. `filter` (optional) rejects events that
+// shouldn't count (e.g. keyboard auto-repeat from a held key).
 //
-// Also tracks each event's AGE: performance.now() at the moment the
-// listener runs, minus the event's own timeStamp. That number answers a
-// question nothing else here can: whether `timeStamp` is when the
-// hardware saw the touch (ages vary, and average a few ms) or merely when
-// the browser got around to dispatching it (ages pin near zero, because
-// the stamp is written moments before the dispatch). Only the first kind
-// can be used to de-jitter timing — if touch timestamps are dispatch
-// times, they carry the main thread's own hiccups inside them.
-function useEventHistory(eventName, filter) {
-  const [history, setHistory] = useState({ intervals: [], ages: [] })
+// Everything accumulates into a ref and nothing re-renders here: an
+// earlier version called setState on every event, which re-rendered six
+// thirty-number lists on the main thread on every single tap. That is
+// exactly the kind of work that delays the NEXT event's delivery, so the
+// panel was inflating the event ages and handler delays it existed to
+// measure. The overlay now repaints on a slow timer instead, and the tap
+// path stays as light with it open as without.
+function useEventRecorder(eventName, filter) {
+  const ref = useRef({ intervals: [], ages: [], events: 0, touches: 0 })
   const lastRef = useRef(null)
 
   useEffect(() => {
     const handler = (e) => {
       if (filter && !filter(e)) return
       const now = e.timeStamp
-      const age = Math.round((performance.now() - now) * 10) / 10
-      // Both derived values are computed HERE, not inside the updater: the
-      // updater runs later, during render, by which point lastRef has
-      // already moved on and every interval would read as zero.
-      const interval = lastRef.current == null ? null : Math.round(now - lastRef.current)
+      const rec = ref.current
+      rec.events++
+      // One touchstart can carry several touches — two fingers landing
+      // inside the same frame arrive as a single event. Counting events
+      // instead of touches would make that look like a dropped tap, which
+      // is the exact question this panel is here to answer.
+      rec.touches += e.changedTouches ? e.changedTouches.length : 1
+      if (lastRef.current != null) {
+        rec.intervals.push(Math.round(now - lastRef.current))
+        if (rec.intervals.length > 30) rec.intervals.shift()
+      }
       lastRef.current = now
-      setHistory((prev) => ({
-        intervals: interval == null ? prev.intervals : [...prev.intervals.slice(-29), interval],
-        ages: [...prev.ages.slice(-29), age],
-      }))
+      rec.ages.push(Math.round((performance.now() - now) * 10) / 10)
+      if (rec.ages.length > 30) rec.ages.shift()
     }
     document.addEventListener(eventName, handler, { capture: true, passive: true })
     return () => document.removeEventListener(eventName, handler, { capture: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventName])
 
-  return history
+  return ref
 }
 
 function stats(values) {
@@ -53,56 +55,71 @@ function stats(values) {
   }
 }
 
-function Line({ label, values, unit = 'ms' }) {
+function line(label, values) {
   const s = stats(values)
-  return (
-    <>
-      {label} — min {s.min} / avg {s.avg} / max {s.max} / spread {s.spread} {unit}
-      {'\n'}
-      {values.join(', ') || '(none yet)'}
-      {'\n\n'}
-    </>
-  )
+  return `${label} — min ${s.min} / avg ${s.avg} / max ${s.max} / spread ${s.spread} ms\n${values.join(', ') || '(none yet)'}\n\n`
 }
+
+const fmt = (v) => (v == null ? 'n/a' : Math.round(v * 100) / 100)
 
 // Temporary diagnostic, not part of normal app UI — only mounts behind
 // ?debugTap=1 in the URL.
 //
-// The point of this panel is to tell apart two failures that feel
-// identical when you tap: the app receiving your taps unevenly (input),
-// and the app receiving them perfectly but *playing* them unevenly
-// (output). "SOUND spacing" is the decisive row — it is the interval
-// between the audio times the hit sounds were actually scheduled at. If
-// TAP spacing is tight and SOUND spacing is not, the problem is entirely
-// on the output side; if both are loose by the same amount, the taps
-// themselves arrived that way and no amount of audio work will fix it.
+// It exists to tell apart three failures that all feel identical when you
+// tap, and which no amount of listening can separate:
+//
+//   - the app receives your taps unevenly (input),
+//   - it receives them fine but PLAYS them unevenly (output),
+//   - it does both correctly but so late that you can't steer your own
+//     hands by what you hear (latency).
+//
+// "SOUND spacing" against "TAP spacing" settles the first two: if SOUND
+// tracks TAP, output is clean and anything left is input. "tap -> ear"
+// settles the third, and it is the one people misread as unevenness —
+// past roughly 100ms the auditory feedback loop stops working and the
+// tapping itself degrades, which looks like an app bug and isn't.
+//
+// "touches vs events vs judged" catches taps going missing: touches is
+// what the digitiser reported, events is how many dispatches carried
+// them, judged is how many actually reached the engine. Those three
+// diverging means input is being lost somewhere in between.
 export default function TapTimingDebug({ engine }) {
-  const touch = useEventHistory('touchstart')
-  const pointer = useEventHistory('pointerdown', (e) => e.pointerType !== 'touch')
-  const key = useEventHistory('keydown', (e) => !e.repeat) // ignore held-key auto-repeat
+  const touch = useEventRecorder('touchstart')
+  const pointer = useEventRecorder('pointerdown', (e) => e.pointerType !== 'touch')
+  const key = useEventRecorder('keydown', (e) => !e.repeat) // ignore held-key auto-repeat
 
-  // The engine's own view: what it decided each tap's sound time was.
-  // Polled rather than pushed so the overlay can never add work to the
-  // tap path it is supposed to be measuring.
-  const [engineView, setEngineView] = useState({ clock: null, soundGaps: [], handlerAges: [] })
+  const [text, setText] = useState('')
   useEffect(() => {
-    const id = setInterval(() => {
+    const render = () => {
+      const c = engine.getClockStats()
       const taps = engine.tapDebugRef.current
       const soundGaps = []
       for (let i = 1; i < taps.length; i++) {
         soundGaps.push(Math.round((taps[i].soundTimeMs - taps[i - 1].soundTimeMs) * 10) / 10)
       }
-      setEngineView({
-        clock: engine.getClockStats(),
-        soundGaps,
-        handlerAges: taps.filter((t) => t.handlerAgeMs != null).map((t) => Math.round(t.handlerAgeMs * 10) / 10),
-      })
-    }, 400)
+      const t = touch.current
+      let out = c
+        ? `AUDIO — rate ${c.sampleRate}Hz  block ${fmt(c.blockMs)}ms  baseLatency ${fmt(c.baseLatencyMs)}ms  outputLatency ${fmt(
+            c.outputLatencyMs,
+          )}ms\n` +
+          `        TAP -> EAR ${fmt(c.tapToEarMs)}ms  (lookahead ${fmt(c.lookaheadMs)}ms + output ${fmt(c.outputLatencyMs)}ms)\n` +
+          `        input delay p90 ${fmt(c.handlerDelayMs)}ms / worst ${fmt(c.worstHandlerDelayMs)}ms  pushed-late ${c.clampCount}/${
+            c.scheduleCount
+          }\n`
+        : 'AUDIO — (tap once to start the audio engine)\n'
+      out += `        touches ${t.touches} / events ${t.events} / judged ${engine.judgedTapCountRef.current}\n\n`
+      out += line('SOUND spacing (scheduled hit-sound gaps)', soundGaps)
+      out += line('TAP spacing — touchstart', t.intervals)
+      out += line('TAP spacing — mouse/pen pointerdown', pointer.current.intervals)
+      out += line('TAP spacing — keydown', key.current.intervals)
+      out += line('EVENT AGE — touchstart (0 = dispatch time, not hardware time)', t.ages)
+      out += line('EVENT AGE — keydown', key.current.ages)
+      setText(out)
+    }
+    render()
+    const id = setInterval(render, 500)
     return () => clearInterval(id)
-  }, [engine])
-
-  const c = engineView.clock
-  const fmt = (v) => (v == null ? 'n/a' : Math.round(v * 100) / 100)
+  }, [engine, touch, pointer, key])
 
   return (
     <div
@@ -125,20 +142,7 @@ export default function TapTimingDebug({ engine }) {
         overflowY: 'auto',
       }}
     >
-      {c
-        ? `AUDIO — rate ${c.sampleRate}Hz  block ${fmt(c.blockMs)}ms  baseLatency ${fmt(c.baseLatencyMs)}ms  outputLatency ${fmt(
-            c.outputLatencyMs,
-          )}ms\n       hit lookahead ${fmt(c.lookaheadMs)}ms  worst handler delay ${fmt(c.worstHandlerDelayMs)}ms  pushed-late ${
-            c.clampCount
-          }/${c.scheduleCount}\n\n`
-        : 'AUDIO — (tap once to start the audio engine)\n\n'}
-
-      <Line label="SOUND spacing (scheduled hit-sound gaps)" values={engineView.soundGaps} />
-      <Line label="TAP spacing — touchstart" values={touch.intervals} />
-      <Line label="TAP spacing — mouse/pen pointerdown" values={pointer.intervals} />
-      <Line label="TAP spacing — keydown" values={key.intervals} />
-      <Line label="EVENT AGE — touchstart (0 = dispatch time, not hardware time)" values={touch.ages} />
-      <Line label="EVENT AGE — keydown" values={key.ages} />
+      {text}
     </div>
   )
 }

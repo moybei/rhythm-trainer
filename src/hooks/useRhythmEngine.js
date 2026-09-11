@@ -161,6 +161,10 @@ export function useRhythmEngine() {
   // and the last column is what separates an input-timing problem from an
   // output-scheduling one — the two look identical from the player's side.
   const tapDebugRef = useRef([])
+  // Monotonic count of taps the engine actually accepted, so the overlay
+  // can compare it against how many touches the digitiser reported and
+  // show whether anything is being lost on the way in.
+  const judgedTapCountRef = useRef(0)
 
   const calSchedulerTimerRef = useRef(null)
   const calNextTimeRef = useRef(0)
@@ -425,6 +429,7 @@ export function useRhythmEngine() {
       // to the tap instead makes the tap-to-sound delay a constant, which
       // is what "even" actually requires. See audio/clock.js.
       const soundTime = clockRef.current.reactionTime(eventTimeStamp)
+      judgedTapCountRef.current++
       tapDebugRef.current.push({
         padId,
         eventMs: eventTimeStamp,
@@ -900,6 +905,7 @@ export function useRhythmEngine() {
     state,
     scheduledEventsRef,
     tapDebugRef,
+    judgedTapCountRef,
     getClockStats,
     handleBpmInput,
     handleLeadInInput,

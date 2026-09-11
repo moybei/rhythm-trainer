@@ -9,14 +9,20 @@
 // is stale by anywhere from 0 to one full block period, by a different
 // amount every single time you look.
 //
-// Desktop block periods are ~3-6ms, small enough that nobody ever hears
-// the difference. iOS Safari routinely runs far larger ones. That turns
-// "play this at ctx.currentTime + k" into "quantise this onto the audio
-// block grid": physically even taps come out snapped to that grid, i.e.
-// audibly uneven — which is exactly the desktop-fine / iPhone-lumpy split
-// this app hit. Adding a constant lookahead does not help, because the
-// quantisation is already baked into the base value before the constant
-// is added.
+// How much that matters is entirely a question of how big the block is,
+// and that varies enormously by device — which is why `blockSec` below is
+// measured rather than assumed. A small buffer (~3ms, which is what iOS
+// Safari turned out to hand us on the iPhone this was first tested on,
+// and what desktop Chrome gives) makes the error inaudible. A large one
+// (some mobile browsers run 1024-2048 frames, i.e. 21-43ms) turns "play
+// this at ctx.currentTime + k" into "quantise this onto the audio block
+// grid": physically even taps come out snapped to that grid, audibly
+// uneven. Adding a constant lookahead is no defence, because the
+// quantisation is baked into the base value before the constant is added.
+//
+// So this is insurance against a class of device, not a fix for one
+// specific symptom — don't reach for it to explain unevenness without
+// checking the measured block period first.
 //
 // The same stale read also poisons judgement: anchoring perf->audio from
 // a single {performance.now(), ctx.currentTime} pair bakes that one
@@ -38,6 +44,12 @@
 // A useful free by-product: since the staircase error spreads roughly
 // uniformly over [0, blockPeriod), the SPREAD of offsets in that same
 // window measures the block period itself — no extra sampling needed.
+//
+// The other half of this module's job has nothing to do with staircases:
+// it owns how long after a tap that tap's sound is scheduled. That number
+// is the difference between a rhythm trainer you can play and one you
+// can't, so it's kept as small as the device's own input delivery allows
+// and, above all, CONSTANT. See reactionTime() at the bottom.
 
 // Deliberately not a neat divisor of any common block period, so samples
 // walk across the staircase phase instead of locking onto one point of it.
@@ -55,6 +67,10 @@ const HANDLER_DELAY_WINDOW_MS = 3000
 // unevenness this whole module is about.
 const ASSUMED_BLOCK_SEC = 0.025
 const MIN_SAMPLES_FOR_BLOCK_ESTIMATE = 12
+// No real audio buffer is bigger than this. Doubles as the stall
+// detector threshold in takeSample(): a measured value past it is never
+// a buffer, it is the audio clock having stopped for a while.
+const MAX_MEASURED_BLOCK_SEC = 0.06
 
 // Headroom baked into the tap-anchored lookahead. Deliberately larger
 // than FLOOR_GUARD_SEC below, so the two are never in a photo finish: the
@@ -64,8 +80,11 @@ const MIN_SAMPLES_FOR_BLOCK_ESTIMATE = 12
 const LOOKAHEAD_GUARD_SEC = 0.006
 const FLOOR_GUARD_SEC = 0.002
 const MIN_LOOKAHEAD_SEC = 0.012
-// Most the lookahead may shrink per tap — see updateLookahead().
-const LOOKAHEAD_DECAY_PER_TAP_SEC = 0.0008
+// Most the lookahead may shrink per tap — see updateLookahead(). Sized
+// against the fastest thing anyone plays here: at a 70ms roll this is a
+// 2% nudge to one gap, under what the ear picks out of a steady sequence,
+// while still unwinding a bad 60ms estimate inside a couple of seconds.
+const LOOKAHEAD_DECAY_PER_TAP_SEC = 0.0015
 const MAX_LOOKAHEAD_SEC = 0.08
 
 // An event timestamp further than this from performance.now() isn't a
@@ -83,11 +102,43 @@ export function createAudioClock(ctx) {
   let clampCount = 0 // times a sound had to be pushed later than requested
   let scheduleCount = 0
   let schedulesSinceReset = 0
+  let lastRawSample = null // previous {perfMs, audioSec}, for stall detection
   let timer = null
 
   function takeSample() {
     const perfMs = performance.now()
-    const offsetSec = ctx.currentTime - perfMs / 1000
+    // A context that isn't running has a frozen currentTime. Sampling it
+    // would teach the filter that the two clocks are drifting apart at
+    // 1:1 — the opposite of the truth — so sit those periods out.
+    // currentTime === 0 is the giveaway for the other stall: a freshly
+    // created context whose output device the OS has not finished opening
+    // yet. It sits at exactly 0 for a few hundred ms while wall time runs
+    // on, and sampling across that reads as a ~360ms "block period" — big
+    // enough to pin the lookahead at its cap for the next eighty taps.
+    // The coarse drift check below cannot catch it, because consecutive
+    // samples inside the stall differ by only one sample interval.
+    if (ctx.state !== 'running' || ctx.currentTime <= 0) {
+      lastRawSample = null
+      return
+    }
+    const audioSec = ctx.currentTime
+    if (lastRawSample) {
+      // Audio time advances one-for-one with wall time, give or take the
+      // staircase at each end. A bigger discrepancy than any plausible
+      // buffer means the audio clock STALLED rather than drifted: the
+      // context was suspended, the tab was backgrounded, or — the case
+      // that actually bit — the context was freshly created and its
+      // currentTime sat at 0 for a few hundred ms while the OS opened the
+      // output device. Every offset collected across a stall is wrong,
+      // and worse, the spread of that window reads as a gigantic "block
+      // period" (360ms was observed), which pins the lookahead at its cap
+      // for the next eighty taps. Throw the window away instead.
+      const dPerf = (perfMs - lastRawSample.perfMs) / 1000
+      const dAudio = audioSec - lastRawSample.audioSec
+      if (Math.abs(dAudio - dPerf) > MAX_MEASURED_BLOCK_SEC) samples = []
+    }
+    lastRawSample = { perfMs, audioSec }
+    const offsetSec = audioSec - perfMs / 1000
     samples.push({ perfMs, offsetSec })
     const cutoff = perfMs - ANCHOR_WINDOW_MS
     if (samples.length > 4 && samples[0].perfMs < cutoff) {
@@ -105,7 +156,7 @@ export function createAudioClock(ctx) {
       // buffer size; the measured spread covers the case where it's
       // missing or understates what the device actually does.
       const reported = typeof ctx.baseLatency === 'number' && ctx.baseLatency > 0 ? ctx.baseLatency : 0
-      blockSec = Math.max(reported, max - min, 0.003)
+      blockSec = Math.min(MAX_MEASURED_BLOCK_SEC, Math.max(reported, max - min, 0.003))
     }
   }
 
@@ -116,6 +167,7 @@ export function createAudioClock(ctx) {
   function reset() {
     samples = []
     handlerDelays = []
+    lastRawSample = null
     schedulesSinceReset = 0
     takeSample()
   }
@@ -127,6 +179,29 @@ export function createAudioClock(ctx) {
     if (handlerDelays.length > 4 && handlerDelays[0].perfMs < cutoff) {
       handlerDelays = handlerDelays.filter((d) => d.perfMs >= cutoff)
     }
+  }
+
+  // A high percentile of recent handler delays, NOT the maximum.
+  //
+  // The lookahead has to exceed a tap's delivery age or that tap's sound
+  // lands in the past and gets clamped. Sizing it off the worst age in the
+  // window sounds safe, but it makes every tap pay for the unluckiest one:
+  // a phone whose touches normally arrive 30ms late, with a single 98ms
+  // straggler, ends up with a ~107ms lookahead — pinned at the cap — for
+  // three full seconds. And it buys nothing, because a tap that genuinely
+  // arrived 98ms late was going to be clamped whatever we did; the only
+  // thing the extra headroom changes is that all 44 punctual taps around
+  // it are delayed too. A percentile keeps the common case tight and
+  // leaves the rare straggler to the floor clamp, which is exactly what
+  // the floor is for.
+  const DELAY_PERCENTILE = 0.9
+  function handlerDelaySec() {
+    if (handlerDelays.length === 0) return 0
+    const sorted = handlerDelays.map((d) => d.delayMs).sort((a, b) => a - b)
+    // With only a handful of samples this lands on (or very near) the max,
+    // which is the right way to be wrong while there's little to go on.
+    const idx = Math.ceil(DELAY_PERCENTILE * (sorted.length - 1))
+    return sorted[idx] / 1000
   }
 
   function worstHandlerDelaySec() {
@@ -170,7 +245,7 @@ export function createAudioClock(ctx) {
   // ~1ms-per-gap the ear can pick out of a roll.
   let lookaheadSec = MIN_LOOKAHEAD_SEC
   function updateLookahead() {
-    const target = Math.min(MAX_LOOKAHEAD_SEC, Math.max(MIN_LOOKAHEAD_SEC, blockSec + worstHandlerDelaySec() + LOOKAHEAD_GUARD_SEC))
+    const target = Math.min(MAX_LOOKAHEAD_SEC, Math.max(MIN_LOOKAHEAD_SEC, blockSec + handlerDelaySec() + LOOKAHEAD_GUARD_SEC))
     if (target > lookaheadSec) lookaheadSec = target
     else lookaheadSec = Math.max(target, lookaheadSec - LOOKAHEAD_DECAY_PER_TAP_SEC)
     return lookaheadSec
@@ -217,7 +292,12 @@ export function createAudioClock(ctx) {
     return {
       blockMs: blockSec * 1000,
       lookaheadMs: reactionLookaheadSec() * 1000,
+      handlerDelayMs: handlerDelaySec() * 1000,
       worstHandlerDelayMs: worstHandlerDelaySec() * 1000,
+      // What the player actually waits between finger and ear: the
+      // lookahead we add, plus however long the OS takes to get the
+      // finished audio out of the speaker.
+      tapToEarMs: reactionLookaheadSec() * 1000 + (typeof ctx.outputLatency === 'number' ? ctx.outputLatency * 1000 : 0),
       sampleRate: ctx.sampleRate,
       baseLatencyMs: typeof ctx.baseLatency === 'number' ? ctx.baseLatency * 1000 : null,
       outputLatencyMs: typeof ctx.outputLatency === 'number' ? ctx.outputLatency * 1000 : null,
