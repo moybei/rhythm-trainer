@@ -15,6 +15,16 @@ const PAD_POSITIONS = {
 //   - Perfect: just FAST/LATE, no tier label
 //   - Great / Good: FAST/LATE on top, the colored tier name underneath
 //   - Miss: no direction (a miss is never "early" or "late") — just "Miss"
+// No human can deliberately land two separate, distinct hits on the same
+// pad faster than this — a gap smaller than it is touchscreen "chatter": a
+// single hard, fast contact physically bouncing on the glass and getting
+// sensed by the digitizer as two separate touch-down events a few
+// milliseconds apart (the same phenomenon as mechanical switch bounce).
+// Confirmed via a raw touch-timing diagnostic on a real device: genuine
+// 0ms gaps between reported pointerdown events during fast single-pad
+// tapping, which is physically impossible as two intentional taps.
+const CHATTER_DEBOUNCE_MS = 25
+
 function TapFeedback({ feedback, pad }) {
   if (!feedback || !feedback.targets.includes(pad)) return null
   const { tier, direction, seq } = feedback
@@ -56,6 +66,9 @@ export default function TapArea({ engine, display, isDesktop, modePickerOpen, on
     registerJudgedTapRef.current = engine.registerJudgedTap
   })
 
+  // Per-pad last-accepted timestamp, for the chatter debounce below.
+  const lastAcceptedRef = useRef({})
+
   useEffect(() => {
     const el = tapAreaRef.current
     if (!el) return
@@ -64,7 +77,11 @@ export default function TapArea({ engine, display, isDesktop, modePickerOpen, on
       const target = e.target.closest('[data-tap-pad]')
       if (!target) return
       e.preventDefault() // stop the delayed compatibility mouse/click events from also firing this
-      registerJudgedTapRef.current(target.dataset.tapPad, e.timeStamp)
+      const padId = target.dataset.tapPad
+      const last = lastAcceptedRef.current[padId]
+      if (last != null && e.timeStamp - last < CHATTER_DEBOUNCE_MS) return // touchscreen chatter, not a second tap
+      lastAcceptedRef.current[padId] = e.timeStamp
+      registerJudgedTapRef.current(padId, e.timeStamp)
     }
     el.addEventListener('pointerdown', onPointerDown, { passive: false })
     return () => el.removeEventListener('pointerdown', onPointerDown)
