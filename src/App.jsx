@@ -9,10 +9,17 @@ import JudgementFooter from './components/JudgementFooter.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import CalibrationModal from './components/CalibrationModal.jsx'
 import TapTempoModal from './components/TapTempoModal.jsx'
+import { preventZoomGestures } from './utils/preventZoomGestures.js'
 
 export default function App() {
   const engine = useRhythmEngine()
   const display = usePatternDisplay(engine.state)
+
+  // Belt-and-suspenders against iOS Safari zoom: the viewport meta and
+  // touch-action CSS are the first line of defense, but Safari ignores
+  // user-scalable=no in a regular (non-installed) tab for accessibility, so
+  // this JS-level guard is what actually stops double-tap/pinch zoom there.
+  useEffect(() => preventZoomGestures(), [])
 
   // Layout: auto-detected from the device's primary pointer (fine = mouse/
   // trackpad → desktop, coarse = touch → tablet), overridable from the

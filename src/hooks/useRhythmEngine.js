@@ -181,6 +181,16 @@ export function useRhythmEngine() {
         perfNow: performance.now(),
         audioTime: audioCtxRef.current.currentTime,
       }
+      // Mobile browsers (iOS especially) can suspend the context the moment
+      // the tab/app is backgrounded even briefly — a screen lock or app
+      // switch mid-session. Resume the instant it's visible again instead
+      // of waiting for the next tap to notice and pay the resume() latency
+      // right when the player is trying to play.
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+          audioCtxRef.current.resume()
+        }
+      })
     }
     if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
     return audioCtxRef.current
@@ -383,19 +393,31 @@ export function useRhythmEngine() {
     (padId, eventTimeStamp) => {
       const s = stateRef.current
       const ctx = ensureAudioCtx()
+      // Prefer the browser's own timestamp for when it received the input
+      // event (mapped into audio-clock time) over "whenever this callback
+      // happened to run" — the latter can lag the real tap by a task or a
+      // frame under load, by a *different* amount each time. That's used
+      // for judging below, but it also matters for the confirmation sound
+      // itself: scheduling playback at a freshly-read ctx.currentTime here
+      // ties its start time to that same variable JS-execution delay, which
+      // is what can make a run of physically-even taps sound unevenly
+      // spaced on playback. Anchoring every playHitSound call to this one
+      // timestamp instead keeps output spacing matched to actual input
+      // spacing.
+      // Clamped to >= 0: when the AudioContext is lazily created by this
+      // very tap (the first tap of a session, before anything's played
+      // yet), the clock anchor is stamped a hair after this event's own
+      // timeStamp — mapping that through perfToAudioTime can come out
+      // very slightly negative, which AudioParam scheduling throws on.
+      const rawNow = Math.max(0, eventTimeStamp != null ? perfToAudioTime(eventTimeStamp) : ctx.currentTime)
       if (!s.isPlaying || scheduledEventsRef.current.length === 0) {
         // Nothing playing to judge against — still confirm the pad/key works
         // with an audible hit sound (same sample as a Perfect hit), just with
         // no tier, no count, and no badge (nothing to be early or late
         // relative to).
-        if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, 'idle', s.hitSoundVolume)
+        if (s.hitSoundEnabled) playHitSound(ctx, rawNow, 'idle', s.hitSoundVolume)
         return
       }
-      // Prefer the browser's own timestamp for when it received the key
-      // event (mapped into audio-clock time) over "whenever this callback
-      // happened to run" — the latter can lag the real keypress by a task
-      // or a frame under load, which registers as extra input jitter.
-      const rawNow = eventTimeStamp != null ? perfToAudioTime(eventTimeStamp) : ctx.currentTime
       const now = rawNow - s.offsetMs / 1000
       const tappedHand = handForPad(padId)
 
@@ -411,7 +433,7 @@ export function useRhythmEngine() {
         // No open same-hand note within reach — a stray tap (including
         // tapping a hand nothing is currently due for). Still responsive,
         // but nothing to judge (matches the "not playing" fallback above).
-        if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, 'idle', s.hitSoundVolume)
+        if (s.hitSoundEnabled) playHitSound(ctx, rawNow, 'idle', s.hitSoundVolume)
         return
       }
 
@@ -424,7 +446,7 @@ export function useRhythmEngine() {
       else tier = 'good' // candidates are pre-filtered to <= GOOD_WINDOW_MS above
 
       nearest.judged = true
-      if (s.hitSoundEnabled) playHitSound(ctx, ctx.currentTime, tier, s.hitSoundVolume)
+      if (s.hitSoundEnabled) playHitSound(ctx, rawNow, tier, s.hitSoundVolume)
 
       // Critical Perfect is treated as "on time" — no badge at all.
       if (padId && tier !== 'critical') {

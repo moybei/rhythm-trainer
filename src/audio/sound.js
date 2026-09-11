@@ -86,6 +86,13 @@ function playBuffer(ctx, buffer, time, gain) {
   source.buffer = buffer
   source.connect(g)
   g.connect(ctx.destination)
+  // Explicitly release the nodes once playback ends instead of leaving it
+  // to garbage collection — cheap insurance against ever accumulating
+  // enough dead nodes in a long session to matter on a low-power device.
+  source.onended = () => {
+    source.disconnect()
+    g.disconnect()
+  }
   source.start(time)
 }
 
