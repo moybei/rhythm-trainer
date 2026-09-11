@@ -1,6 +1,11 @@
+import { useRef } from 'react'
+import { useNativePointerDown } from '../hooks/useNativePointerDown.js'
+
 export default function TapTempoModal({ engine, isDesktop, onClose }) {
   const { state } = engine
   const count = state.tapTempoTapCount
+  const tapBtnRef = useRef(null)
+  useNativePointerDown(tapBtnRef, (e) => engine.registerTapTempoTap(e.timeStamp))
 
   let status
   if (count === 0) status = 'Waiting for your first tap…'
@@ -14,14 +19,7 @@ export default function TapTempoModal({ engine, isDesktop, onClose }) {
           Tap along to your desired tempo{isDesktop ? ' (press X, or tap the button)' : ''} — BPM updates from the
           average of your last 8 taps.
         </div>
-        <button
-          type="button"
-          className="calibration-tap"
-          onPointerDown={(e) => {
-            e.preventDefault()
-            engine.registerTapTempoTap(e.timeStamp)
-          }}
-        >
+        <button type="button" className="calibration-tap" ref={tapBtnRef}>
           TAP{isDesktop ? ' (X)' : ''}
         </button>
         <div className="calibration-status">{status}</div>
